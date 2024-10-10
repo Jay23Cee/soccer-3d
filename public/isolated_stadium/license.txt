@@ -1,0 +1,11 @@
+Model Information:
+* title:	Isolated Stadium
+* source:	https://sketchfab.com/3d-models/isolated-stadium-56b08e4924b14532b4a4d42d563f7bcf
+* author:	mostafasami (https://sketchfab.com/mostafasami)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Isolated Stadium" (https://sketchfab.com/3d-models/isolated-stadium-56b08e4924b14532b4a4d42d563f7bcf) by mostafasami (https://sketchfab.com/mostafasami) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

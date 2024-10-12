@@ -1,63 +1,52 @@
-import React, { useState, useMemo, useRef, useEffect } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls, useGLTF, PerspectiveCamera, CameraControls } from "@react-three/drei";
-import { Physics, useBox, useSphere } from "@react-three/cannon";
+import React, { useState, useRef, useEffect } from "react";
+import { Canvas, useFrame, useLoader } from "@react-three/fiber";
+import { OrbitControls, useGLTF, PerspectiveCamera } from "@react-three/drei";
+import { Physics, useBox, useSphere, useCompoundBody, Debug } from "@react-three/cannon";
+import * as THREE from "three";
 
-// Preload the goal net model
+// Preload assets
 useGLTF.preload("/goalnet.gltf");
+useGLTF.preload("/ball/scene.gltf");
 
-// Load the soccer ball from the GLTF file
-function SoccerBallModel({ scale, yPosition }) {
+function SoccerBallModel({ scale }) {
   const { scene } = useGLTF("/ball/scene.gltf");
   const [ref, api] = useSphere(() => ({
     mass: 1,
-    position: [0, yPosition, -12],
+    position: [0, 0.5, -12],
     args: [scale],
-    restitution: 1.3, // Adjusted restitution for better bouncing
+    restitution: 0.7,
     friction: 0.5,
-    linearDamping: 0.3, // Increased damping to reduce rolling off
+    linearDamping: 0.3,
     angularDamping: 0.3,
   }));
-
-  // Store the direction of the force to apply gradually
   const direction = useRef([0, 0, 0]);
+  const MAX_SPEED = 15;
+  const FORCE = 15;
 
-  // Keyboard Controls for Movement
   useEffect(() => {
     const handleKeyDown = (event) => {
       switch (event.key) {
         case "ArrowUp":
-          direction.current = [0, 0, -50]; // Set direction for forward movement
+          direction.current = [0, 0, -FORCE];
           break;
         case "ArrowDown":
-          direction.current = [0, 0, 50]; // Set direction for backward movement
+          direction.current = [0, 0, FORCE];
           break;
         case "ArrowLeft":
-          direction.current = [-50, 0, 0]; // Set direction for left movement
+          direction.current = [-FORCE, 0, 0];
           break;
         case "ArrowRight":
-          direction.current = [50, 0, 0]; // Set direction for right movement
+          direction.current = [FORCE, 0, 0];
           break;
         case " ":
-          api.applyImpulse([0, 10, 0], [0, 0, 0]); // Jump effect
+          api.applyImpulse([0, 10, 0], [0, 0, 0]);
           break;
         default:
           break;
       }
     };
 
-    const handleKeyUp = (event) => {
-      // Stop applying force when the key is released
-      if (
-        event.key === "ArrowUp" ||
-        event.key === "ArrowDown" ||
-        event.key === "ArrowLeft" ||
-        event.key === "ArrowRight"
-      ) {
-        direction.current = [0, 0, 0];
-      }
-    };
-
+    const handleKeyUp = () => (direction.current = [0, 0, 0]);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
     return () => {
@@ -66,27 +55,35 @@ function SoccerBallModel({ scale, yPosition }) {
     };
   }, [api]);
 
-  // Apply force every frame based on the current direction
   useFrame(() => {
+    api.velocity.subscribe(([vx, vy, vz]) => {
+      const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
+      if (speed > MAX_SPEED) {
+        const scale = MAX_SPEED / speed;
+        api.velocity.set(vx * scale, vy * scale, vz * scale);
+      }
+    });
     if (direction.current[0] !== 0 || direction.current[2] !== 0) {
       api.applyForce(direction.current, [0, 0, 0]);
     }
   });
 
   return (
-    <group ref={ref} position={[0, yPosition, 0]} scale={[scale, scale, scale]}>
+    <group ref={ref} scale={[scale, scale, scale]}>
       <primitive object={scene} />
     </group>
   );
 }
 
-// Load the soccer field (stadium) from the GLTF file
 function SoccerField() {
-  const { scene } = useGLTF("/isolated_stadium/scene.gltf");
+  const grassTexture = useLoader(
+    THREE.TextureLoader,
+    "Grass001_2K-JPG/Grass001_2K-JPG_Color.jpg"
+  );
+  grassTexture.wrapS = grassTexture.wrapT = THREE.RepeatWrapping;
+  grassTexture.repeat.set(20, 20);
 
   const fieldSize = 40;
-
-  // Create a static box to act as the physical ground for the soccer field
   const [ref] = useBox(() => ({
     type: "Static",
     position: [0, -0.05, 0],
@@ -94,62 +91,70 @@ function SoccerField() {
   }));
 
   return (
-    <>
-      {/* Physics Box Collider for the ground */}
-      <mesh ref={ref} visible={false}>
-        <boxGeometry args={[fieldSize, 0.1, fieldSize]} />
-        <meshStandardMaterial color="green" />
-      </mesh>
-
-      {/* The visual soccer field model */}
-      {scene && (
-        <primitive
-          object={scene}
-          scale={[100, 10, 120]}
-          position={[0, -0.05, 0]}
-        />
-      )}
-    </>
+    <mesh ref={ref} receiveShadow>
+      <boxGeometry args={[fieldSize, 0.1, fieldSize]} />
+      <meshStandardMaterial map={grassTexture} />
+    </mesh>
   );
 }
 
-// Load the goal net model only once and reuse it
 function GoalNet({ position, scale, rotation }) {
   const { scene } = useGLTF("/goalnet.gltf");
+  const [ref] = useCompoundBody(() => ({
+    mass: 0,
+    position: position,
+    rotation: rotation,
+    shapes: [
+      { type: "Box", position: [0, 1.5 * scale, -0.5 * scale], args: [4 * scale, 3 * scale, 0.1 * scale] }, // Back net
+      { type: "Box", position: [-2 * scale, 1.5 * scale, 0], args: [0.1 * scale, 3 * scale, 1.5 * scale] }, // Left post
+      { type: "Box", position: [2 * scale, 1.5 * scale, 0], args: [0.1 * scale, 3 * scale, 1.5 * scale] }, // Right post
+      { type: "Box", position: [0, 0.15 * scale, 1.5 * scale], args: [4 * scale, 0.1 * scale, 3 * scale] }, // Bottom net
+    ],
+  }));
+
+  useEffect(() => {
+    if (scene) {
+      scene.traverse((child) => {
+        if (child.isMesh) {
+          child.material = new THREE.MeshStandardMaterial({
+            color: "red",
+            emissive: "red",
+            emissiveIntensity: 1,
+          });
+        }
+      });
+    }
+  }, [scene]);
 
   return (
-    <primitive object={scene.clone()} scale={scale} position={position} rotation={rotation} />
+    <group ref={ref} position={position} rotation={rotation}>
+      <primitive object={scene} scale={scale} />
+    </group>
   );
 }
 
-// Boundary Walls with Physics
 function BoundaryWall({ position, size }) {
   const [ref] = useBox(() => ({
     type: "Static",
     position: position,
     args: size,
-    restitution: 1.1, // Increased restitution for a more consistent bounce
+    restitution: 0.8,
     friction: 0.6,
   }));
 
   return (
     <mesh ref={ref}>
       <boxGeometry args={size} />
-      <meshStandardMaterial color="red" />
+      <meshStandardMaterial color="red" emissive="red" emissiveIntensity={1} />
     </mesh>
   );
 }
 
-// Main Canvas and Physics Setup
 function App() {
   const [ballScale, setBallScale] = useState(1);
-  const [yPosition, setYPosition] = useState(5);
-  const controlsRef = useRef();
   const [controlsEnabled, setControlsEnabled] = useState(false);
 
-  const handleActivateControls = () => {
-    setControlsEnabled(true);
-  };
+  const handleActivateControls = () => setControlsEnabled(true);
 
   return (
     <>
@@ -176,52 +181,30 @@ function App() {
           />
         </label>
         <br />
-        <label>
-          Y Position: {yPosition.toFixed(2)}
-          <input
-            type="range"
-            min="1"
-            max="10"
-            step="0.5"
-            value={yPosition}
-            onChange={(e) => setYPosition(parseFloat(e.target.value))}
-          />
-        </label>
-        <br />
-        <button onClick={handleActivateControls}>
-          Activate Ball Controls
-        </button>
+        <button onClick={handleActivateControls}>Activate Ball Controls</button>
       </div>
 
-      <Canvas style={{ height: "100vh" }}>
-        <PerspectiveCamera makeDefault position={[0, 20, 30]} fov={75} />
-        <ambientLight intensity={2} />
-        <directionalLight position={[10, 20, 10]} intensity={1.5} castShadow />
+      <Canvas style={{ height: "100vh", width: "100vw" }} frameloop="demand">
+        <PerspectiveCamera makeDefault position={[0, 20, 50]} fov={50} />
+        <ambientLight intensity={0.6} />
+        <directionalLight position={[15, 25, 15]} intensity={1.8} castShadow />
+        <pointLight position={[-10, 10, 10]} intensity={0.5} />
 
-        {/* Enhanced Camera Controls */}
-        <CameraControls ref={controlsRef} />
-
-        {/* Keep OrbitControls for additional control */}
         <OrbitControls
           enablePan={true}
           maxPolarAngle={Math.PI / 2}
           minPolarAngle={Math.PI / 3}
           maxDistance={50}
-          minDistance={10}
+          minDistance={15}
         />
 
-        <Physics gravity={[0, -9.81, 0]} iterations={20} tolerance={0.0001}>
-          {controlsEnabled && <SoccerBallModel scale={ballScale} yPosition={yPosition} />}
-          <SoccerField />
-
-          {/* Boundary Walls */}
-          <BoundaryWall position={[0, 2.5, -20]} size={[40, 5, 0.5]} /> {/* Back Wall */}
-          <BoundaryWall position={[0, 2.5, 20]} size={[40, 5, 0.5]} />  {/* Front Wall */}
-          <BoundaryWall position={[-20, 2.5, 0]} size={[0.5, 5, 40]} /> {/* Left Wall */}
-          <BoundaryWall position={[20, 2.5, 0]} size={[0.5, 5, 40]} />  {/* Right Wall */}
-
-          <GoalNet key="goalnet-1" position={[0, 0.5, -18]} scale={2.0} />
-          <GoalNet key="goalnet-2" position={[0, 0.5, 18]} scale={2.0} rotation={[0, Math.PI, 0]} />
+        <Physics gravity={[0, -9.81, 0]} iterations={15} tolerance={0.0001}>
+          <Debug color="hotpink">
+            {controlsEnabled && <SoccerBallModel scale={ballScale} />}
+            <SoccerField />
+            <GoalNet key="goalnet-1" position={[0, 0.5, -18]} scale={2.0} rotation={[0, 0, 0]} />
+            <GoalNet key="goalnet-2" position={[0, 0.5, 18]} scale={2.0} rotation={[0, Math.PI, 0]} />
+          </Debug>
         </Physics>
       </Canvas>
     </>

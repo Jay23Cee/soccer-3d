@@ -30,25 +30,35 @@ function SoccerField() {
   );
 }
 
-// GoalNet Component
+
 function GoalNet({ position, scale, rotation, onGoal }) {
   const { scene } = useGLTF("/goalnet.gltf");
-  const [ref] = useCompoundBody(() => ({
+  const [ref, api] = useCompoundBody(() => ({
     mass: 0,
     position: position,
     rotation: rotation,
     shapes: [
-      { type: "Box", position: [0, 1.5 * scale, -0.5 * scale], args: [4 * scale, 3 * scale, 0.1 * scale] },
-      { type: "Box", position: [-2 * scale, 1.5 * scale, 0], args: [0.1 * scale, 3 * scale, 1.5 * scale] },
-      { type: "Box", position: [2 * scale, 1.5 * scale, 0], args: [0.1 * scale, 3 * scale, 1.5 * scale] },
-      { type: "Box", position: [0, -0.28 * scale, -0.005 * scale], args: [4 * scale, 0.1 * scale, 1.6 * scale] },
+      { type: "Box", position: [0, 0.9 * scale, -0.9 * scale], args: [4 * scale, 2 * scale, 0.1 * scale] }, // top collider
+      { type: "Box", position: [-2.5 * scale, 1.0 * scale, 0], args: [0.1 * scale, 2 * scale, 1.5 * scale] }, // left side wall
+      { type: "Box", position: [2.5 * scale, 1.0 * scale, 0], args: [0.1 * scale, 2 * scale, 1.5 * scale] }, // right side wall
+      { type: "Box", position: [0, -0.28 * scale, -0.005 * scale], args: [4.5 * scale, 0.1 * scale, 1.6 * scale] }, // bottom collider
     ],
-    onCollide: (e) => {
-      if (e.body && e.body.name === "soccerBall") {
+  }));
+
+  // Adding collision detection logic for the bottom part only
+  useEffect(() => {
+    const unsubscribe = api.collisionResponse.subscribe((e) => {
+      // We only want to detect collisions for the bottom collider
+      const isBottomCollider = e.target === ref.current; // Ensure we're listening to the correct body
+      if (isBottomCollider && e.body.name === "soccerBall") {
         onGoal();
       }
-    },
-  }));
+    });
+
+    return () => {
+      unsubscribe(); // Clean up on unmount
+    };
+  }, [api, ref, onGoal]);
 
   useEffect(() => {
     if (scene) {
@@ -70,6 +80,8 @@ function GoalNet({ position, scale, rotation, onGoal }) {
     </group>
   );
 }
+
+
 
 // SoccerBallModel Component
 function SoccerBallModel({ scale, resetRef }) {

@@ -13,78 +13,79 @@ useGLTF.preload("/ball/scene.gltf");
 function SoccerField() {
   const grassTexture = useLoader(THREE.TextureLoader, "Grass001_2K-JPG/Grass001_2K-JPG_Color.jpg");
   grassTexture.wrapS = grassTexture.wrapT = THREE.RepeatWrapping;
-  grassTexture.repeat.set(20, 20);
+  grassTexture.repeat.set(40, 20); // Adjusted for better visual stripes
 
-  const fieldSize = 40;
+  const fieldSize = [100, 0.1, 160]; // Updated to stretch the field properly
   const [ref] = useBox(() => ({
     type: "Static",
     position: [0, -0.05, 0],
-    args: [fieldSize, 0.1, fieldSize],
+    args: fieldSize,
   }));
 
   return (
     <mesh ref={ref} receiveShadow>
-      <boxGeometry args={[fieldSize, 0.1, fieldSize]} />
+      <boxGeometry args={fieldSize} />
       <meshStandardMaterial map={grassTexture} />
+
+      {/* Field Markings */}
+      <group>
+        {/* Center Circle */}
+        <mesh position={[0, 0.06, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <circleGeometry args={[10, 64]} />
+          <meshBasicMaterial color="white" side={THREE.DoubleSide} />
+        </mesh>
+        {/* Halfway Line */}
+        <mesh position={[0, 0.06, 0]} rotation={[-Math.PI / 2, 0, 1.55]}>
+          <planeGeometry args={[0.2, 120]} />
+          <meshBasicMaterial color="white" side={THREE.DoubleSide} />
+        </mesh>
+{/* Goal Areas (Outlined, lying flat) */}
+<lineSegments position={[0, 0.06, -75]} rotation={[-Math.PI / 2, 0, 0]}>
+  <edgesGeometry args={[new THREE.PlaneGeometry(36, 6)]} />
+  <lineBasicMaterial color="white" />
+</lineSegments>
+<lineSegments position={[0, 0.06, 75]} rotation={[-Math.PI / 2, 0, 0]}>
+  <edgesGeometry args={[new THREE.PlaneGeometry(36, 6)]} />
+  <lineBasicMaterial color="white" />
+</lineSegments>
+
+{/* Penalty Areas (Outlined, lying flat) */}
+<lineSegments position={[0, 0.06, -70]} rotation={[-Math.PI / 2, 0, 0]}>
+  <edgesGeometry args={[new THREE.PlaneGeometry(44, 18)]} />
+  <lineBasicMaterial color="white" />
+</lineSegments>
+<lineSegments position={[0, 0.06, 70]} rotation={[-Math.PI / 2, 0, 0]}>
+  <edgesGeometry args={[new THREE.PlaneGeometry(44, 18)]} />
+  <lineBasicMaterial color="white" />
+</lineSegments>
+
+        {/* Penalty Arcs */}
+        <mesh position={[0, 0.06, -75]} rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[5, 6, 64, 1, Math.PI, Math.PI]} />
+          <meshBasicMaterial color="white" side={THREE.DoubleSide} />
+        </mesh>
+        <mesh position={[0, 0.06, 75]} rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[5, 6, 64, 1, 0, Math.PI]} />
+          <meshBasicMaterial color="white" side={THREE.DoubleSide} />
+        </mesh>
+{/* Corner Arcs */}
+{[-1, 1].map((x) =>
+  [-1, 1].map((z) => (
+    <mesh
+      key={`${x}-${z}`}
+      position={[x * (fieldSize[0] / 2 - 0.5), 0.06, z * (fieldSize[2] / 2 - 0.5)]}
+      rotation={[-Math.PI / 2, 0, 0]}
+    >
+      <circleGeometry args={[1.5, 32, 0, Math.PI / 2]} />
+      <meshBasicMaterial color="white" side={THREE.DoubleSide} />
+    </mesh>
+  ))
+)}
+
+      </group>
     </mesh>
   );
 }
-
-
-function GoalNet({ position, scale, rotation, onGoal }) {
-  const { scene } = useGLTF("/goalnet.gltf");
-
-  // Create the compound body for the goal structure, excluding the bottom
-  const [ref] = useCompoundBody(() => ({
-    mass: 0,
-    position: position,
-    rotation: rotation,
-    shapes: [
-      { type: "Box", position: [0, 0.9 * scale, -0.9 * scale], args: [4 * scale, 2 * scale, 0.1 * scale] }, // top collider
-      { type: "Box", position: [-2.5 * scale, 1.0 * scale, 0], args: [0.1 * scale, 2 * scale, 1.5 * scale] }, // left side wall
-      { type: "Box", position: [2.5 * scale, 1.0 * scale, 0], args: [0.1 * scale, 2 * scale, 1.5 * scale] }, // right side wall
-      { type: "Box", position: [0, 2 * scale, -0.005 * scale], args: [4.5 * scale, 0.1 * scale, 1.6 * scale] }, // bottom collider
-    ],
-  }));
-
-  // Create a separate collider for the bottom and make it a sensor
-  const [bottomRef] = useBox(() => ({
-    type: "Static",
-    position: [position[0], position[1] + 0.055 * scale, position[2] - 0.105 * scale],
-    rotation: rotation,
-    args: [4.5 * scale, 0.1 * scale, 1.6 * scale],
-    isTrigger: true,
-    onCollide: (e) => {
-      if (e.body.name === "soccerBall") {
-        onGoal();
-      }
-    },
-  }));
-
-  useEffect(() => {
-    if (scene) {
-      scene.traverse((child) => {
-        if (child.isMesh) {
-          child.material = new THREE.MeshStandardMaterial({
-            color: "red",
-            emissive: "red",
-            emissiveIntensity: 1,
-          });
-        }
-      });
-    }
-  }, [scene]);
-
-  return (
-    <group position={position} rotation={rotation}>
-      <primitive object={scene.clone()} scale={scale} />
-      <group ref={ref} />
-      <mesh ref={bottomRef} visible={false} />
-    </group>
-  );
-}
-
-
 
 // SoccerBallModel Component
 function SoccerBallModel({ scale, resetRef }) {
@@ -176,6 +177,60 @@ function SoccerBallModel({ scale, resetRef }) {
   );
 }
 
+// GoalNet Component
+function GoalNet({ position, scale, rotation, onGoal }) {
+  const { scene } = useGLTF("/goalnet.gltf");
+
+  // Create the compound body for the goal structure, excluding the bottom
+  const [ref] = useCompoundBody(() => ({
+    mass: 0,
+    position: position,
+    rotation: rotation,
+    shapes: [
+      { type: "Box", position: [0, 0.9 * scale, -0.9 * scale], args: [4 * scale, 2 * scale, 0.1 * scale] }, // top collider
+      { type: "Box", position: [-2.5 * scale, 1.0 * scale, 0], args: [0.1 * scale, 2 * scale, 1.5 * scale] }, // left side wall
+      { type: "Box", position: [2.5 * scale, 1.0 * scale, 0], args: [0.1 * scale, 2 * scale, 1.5 * scale] }, // right side wall
+      { type: "Box", position: [0, 2 * scale, -0.005 * scale], args: [4.5 * scale, 0.1 * scale, 1.6 * scale] }, // bottom collider
+    ],
+  }));
+
+  // Create a separate collider for the bottom and make it a sensor
+  const [bottomRef] = useBox(() => ({
+    type: "Static",
+    position: [position[0], position[1] + 0.055 * scale, position[2] - 0.105 * scale],
+    rotation: rotation,
+    args: [4.5 * scale, 0.1 * scale, 1.6 * scale],
+    isTrigger: true,
+    onCollide: (e) => {
+      if (e.body.name === "soccerBall") {
+        onGoal();
+      }
+    },
+  }));
+
+  useEffect(() => {
+    if (scene) {
+      scene.traverse((child) => {
+        if (child.isMesh) {
+          child.material = new THREE.MeshStandardMaterial({
+            color: "red",
+            emissive: "red",
+            emissiveIntensity: 1,
+          });
+        }
+      });
+    }
+  }, [scene]);
+
+  return (
+    <group position={position} rotation={rotation}>
+      <primitive object={scene.clone()} scale={scale} />
+      <group ref={ref} />
+      <mesh ref={bottomRef} visible={false} />
+    </group>
+  );
+}
+
 // App Component
 function App() {
   const [ballScale, setBallScale] = useState(1);
@@ -227,25 +282,25 @@ function App() {
       </div>
 
       <Canvas style={{ height: "100vh", width: "100vw" }} frameloop="demand">
-        <PerspectiveCamera makeDefault position={[0, 20, 50]} fov={50} />
+        <PerspectiveCamera makeDefault position={[0, 50, 200]} fov={60} />
         <ambientLight intensity={0.6} />
-        <directionalLight position={[15, 25, 15]} intensity={1.8} castShadow />
-        <pointLight position={[-10, 10, 10]} intensity={0.5} />
+        <directionalLight position={[30, 50, 30]} intensity={1.8} castShadow />
+        <pointLight position={[-20, 20, 20]} intensity={0.5} />
 
         <OrbitControls
           enablePan={true}
-          maxPolarAngle={Math.PI / 2}
-          minPolarAngle={Math.PI / 3}
-          maxDistance={50}
-          minDistance={15}
+          maxPolarAngle={Math.PI}
+          minPolarAngle={0}
+          maxDistance={400}
+          minDistance={10}
         />
 
         <Physics gravity={[0, -9.81, 0]} iterations={15} tolerance={0.0001}>
           <Debug color="hotpink">
             {controlsEnabled && <SoccerBallModel scale={ballScale} resetRef={ballResetRef} />}
             <SoccerField />
-            <GoalNet key="goalnet-1" position={[0, 0.5, -18]} scale={2.0} rotation={[0, 0, 0]} onGoal={handleGoalTeamOne} />
-            <GoalNet key="goalnet-2" position={[0, 0.5, 18]} scale={2.0} rotation={[0, Math.PI, 0]} onGoal={handleGoalTeamTwo} />
+            <GoalNet key="goalnet-1" position={[0, 0.5, -78]} scale={2.0} rotation={[0, 0, 0]} onGoal={handleGoalTeamOne} />
+            <GoalNet key="goalnet-2" position={[0, 0.5, 78]} scale={2.0} rotation={[0, Math.PI, 0]} onGoal={handleGoalTeamTwo} />
           </Debug>
         </Physics>
       </Canvas>

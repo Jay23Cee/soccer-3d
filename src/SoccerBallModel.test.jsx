@@ -1,6 +1,7 @@
 import React from "react";
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { SHOT_METER_CONFIG } from "./config/gameConfig";
 
 let frameCallback;
 let velocity;
@@ -63,6 +64,11 @@ function stepFrame() {
   });
 }
 
+function setBallPosition(nextPosition) {
+  position = [...nextPosition];
+  positionSubscriber?.([...position]);
+}
+
 describe("SoccerBallModel", () => {
   beforeAll(async () => {
     ({ default: SoccerBallModel } = await import("./SoccerBallModel"));
@@ -111,7 +117,7 @@ describe("SoccerBallModel", () => {
     vi.restoreAllMocks();
   });
 
-  it("emits charge updates and releases with higher launch speed on a longer hold", () => {
+  it("starts at 0%, advances in 1% steps, and releases harder on longer holds", () => {
     const onShotChargeChange = vi.fn();
     const onKickRelease = vi.fn();
 
@@ -136,9 +142,24 @@ describe("SoccerBallModel", () => {
     });
     stepFrame();
 
-    expect(onShotChargeChange).toHaveBeenCalledWith(
-      expect.objectContaining({ isCharging: true, canShoot: true })
-    );
+    const firstChargingCall = onShotChargeChange.mock.calls.find(
+      ([payload]) => payload.isCharging
+    )?.[0];
+    expect(firstChargingCall).toMatchObject({ isCharging: true, chargeRatio: 0 });
+
+    nowValue += 360;
+    stepFrame();
+    nowValue += 180;
+    stepFrame();
+
+    const chargingRatios = onShotChargeChange.mock.calls
+      .map(([payload]) => payload)
+      .filter((payload) => payload.isCharging)
+      .map((payload) => payload.chargeRatio);
+    for (let index = 1; index < chargingRatios.length; index += 1) {
+      expect(chargingRatios[index]).toBeGreaterThanOrEqual(chargingRatios[index - 1]);
+      expect(Number.isInteger(Math.round(chargingRatios[index] * 100))).toBe(true);
+    }
 
     nowValue += 20;
     act(() => {
@@ -164,5 +185,114 @@ describe("SoccerBallModel", () => {
 
     const holdKick = onKickRelease.mock.calls[1][0];
     expect(holdKick.launchSpeed).toBeGreaterThan(tapKick.launchSpeed);
+  });
+
+  it("fires one auto-tap when possession starts within the pre-possession window", () => {
+    const onKickRelease = vi.fn();
+    position = [8, 1.05, 8];
+
+    render(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled={false}
+        playerControlsEnabled
+        playerPosition={[0, 0, 0]}
+        playerRotation={[0, 0, 0]}
+        onKickRelease={onKickRelease}
+      />
+    );
+
+    stepFrame();
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: " " }));
+    });
+
+    nowValue += 150;
+    setBallPosition([0, 1.05, 0]);
+    stepFrame();
+    stepFrame();
+    stepFrame();
+
+    expect(onKickRelease).toHaveBeenCalledTimes(1);
+    expect(onKickRelease.mock.calls[0][0].chargeRatio).toBeCloseTo(
+      SHOT_METER_CONFIG.MIN_CHARGE_RATIO
+    );
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: " " }));
+    });
+  });
+
+  it("does not auto-tap when possession starts after the pre-possession window", () => {
+    const onKickRelease = vi.fn();
+    position = [8, 1.05, 8];
+
+    render(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled={false}
+        playerControlsEnabled
+        playerPosition={[0, 0, 0]}
+        playerRotation={[0, 0, 0]}
+        onKickRelease={onKickRelease}
+      />
+    );
+
+    stepFrame();
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: " " }));
+    });
+
+    nowValue += 260;
+    setBallPosition([0, 1.05, 0]);
+    stepFrame();
+    stepFrame();
+
+    expect(onKickRelease).not.toHaveBeenCalled();
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: " " }));
+    });
+  });
+
+  it("does not auto-tap if Space is released before possession starts", () => {
+    const onKickRelease = vi.fn();
+    position = [8, 1.05, 8];
+
+    render(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled={false}
+        playerControlsEnabled
+        playerPosition={[0, 0, 0]}
+        playerRotation={[0, 0, 0]}
+        onKickRelease={onKickRelease}
+      />
+    );
+
+    stepFrame();
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: " " }));
+    });
+    nowValue += 90;
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: " " }));
+    });
+
+    nowValue += 40;
+    setBallPosition([0, 1.05, 0]);
+    stepFrame();
+    stepFrame();
+
+    expect(onKickRelease).not.toHaveBeenCalled();
   });
 });

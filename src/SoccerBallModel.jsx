@@ -15,12 +15,19 @@ const PLAYER_POSSESSION_CONFIG = {
   REACQUIRE_COOLDOWN_MS: 300,
 };
 
+const PRE_POSSESSION_AUTO_TAP_WINDOW_MS = 200;
+
 const SHOT_CHARGE_IDLE = {
   isCharging: false,
   chargeRatio: 0,
   isPerfect: false,
   canShoot: false,
 };
+
+function quantizeChargeRatio(chargeRatio) {
+  const clamped = THREE.MathUtils.clamp(chargeRatio, 0, 1);
+  return Math.min(1, Math.floor(clamped * 100) / 100);
+}
 
 function getNowMs() {
   if (typeof performance !== "undefined") {
@@ -67,6 +74,8 @@ function SoccerBallModel({
   const kickRequestedRef = useRef(null);
   const possessionRef = useRef(false);
   const possessionLockUntilRef = useRef(0);
+  const spaceHeldRef = useRef(false);
+  const pendingAutoTapRef = useRef(null);
   const shotChargeStartAtRef = useRef(0);
   const shotChargeRatioRef = useRef(0);
   const shotChargingRef = useRef(false);
@@ -94,7 +103,7 @@ function SoccerBallModel({
         previousState.isCharging !== safeState.isCharging ||
         previousState.isPerfect !== safeState.isPerfect ||
         previousState.canShoot !== safeState.canShoot ||
-        Math.abs(previousState.chargeRatio - safeState.chargeRatio) >= 0.01;
+        Math.abs(previousState.chargeRatio - safeState.chargeRatio) > 0.0001;
 
       if (!changed) {
         return;
@@ -111,9 +120,26 @@ function SoccerBallModel({
     shotChargeRatioRef.current = 0;
     shotChargingRef.current = false;
     shotChargeCooldownUntilRef.current = 0;
+    spaceHeldRef.current = false;
+    pendingAutoTapRef.current = null;
     kickRequestedRef.current = null;
     emitShotChargeState(SHOT_CHARGE_IDLE);
   }, [emitShotChargeState]);
+
+  const startShotCharge = useCallback(
+    (startedAtMs) => {
+      shotChargingRef.current = true;
+      shotChargeStartAtRef.current = startedAtMs;
+      shotChargeRatioRef.current = 0;
+      emitShotChargeState({
+        isCharging: true,
+        chargeRatio: 0,
+        isPerfect: false,
+        canShoot: true,
+      });
+    },
+    [emitShotChargeState]
+  );
 
   useEffect(() => {
     ballScene.traverse((child) => {
@@ -140,6 +166,8 @@ function SoccerBallModel({
     shotChargeRatioRef.current = 0;
     shotChargingRef.current = false;
     shotChargeCooldownUntilRef.current = 0;
+    spaceHeldRef.current = false;
+    pendingAutoTapRef.current = null;
     kickDecayStartAtRef.current = 0;
     kickDecayEndAtRef.current = 0;
     kickStartSpeedRef.current = 0;
@@ -160,6 +188,8 @@ function SoccerBallModel({
     shotChargeRatioRef.current = 0;
     shotChargingRef.current = false;
     shotChargeCooldownUntilRef.current = 0;
+    spaceHeldRef.current = false;
+    pendingAutoTapRef.current = null;
     kickDecayStartAtRef.current = 0;
     kickDecayEndAtRef.current = 0;
     kickStartSpeedRef.current = 0;
@@ -224,49 +254,56 @@ function SoccerBallModel({
         return;
       }
 
+      event.preventDefault();
+      spaceHeldRef.current = true;
+
       const now = getNowMs();
-      if (now < shotChargeCooldownUntilRef.current || !possessionRef.current) {
+      if (now < shotChargeCooldownUntilRef.current) {
         return;
       }
 
-      event.preventDefault();
-      shotChargingRef.current = true;
-      shotChargeStartAtRef.current = now;
-      shotChargeRatioRef.current = SHOT_METER_CONFIG.MIN_CHARGE_RATIO;
-      emitShotChargeState({
-        isCharging: true,
-        chargeRatio: SHOT_METER_CONFIG.MIN_CHARGE_RATIO,
-        isPerfect: false,
-        canShoot: true,
-      });
+      if (possessionRef.current) {
+        pendingAutoTapRef.current = null;
+        startShotCharge(now);
+        return;
+      }
+
+      pendingAutoTapRef.current = {
+        expiresAt: now + PRE_POSSESSION_AUTO_TAP_WINDOW_MS,
+      };
     };
 
     const handleKeyUp = (event) => {
-      if (!playerControlsEnabled || event.key !== " " || !shotChargingRef.current) {
+      if (!playerControlsEnabled || event.key !== " ") {
         return;
       }
 
       event.preventDefault();
+      spaceHeldRef.current = false;
+      pendingAutoTapRef.current = null;
+
+      if (!shotChargingRef.current) {
+        return;
+      }
+
       shotChargingRef.current = false;
 
       const chargeDurationMs = Math.max(0, getNowMs() - shotChargeStartAtRef.current);
-      const chargeRatio = THREE.MathUtils.clamp(
-        chargeDurationMs / SHOT_METER_CONFIG.MAX_CHARGE_MS,
-        SHOT_METER_CONFIG.MIN_CHARGE_RATIO,
-        1
-      );
+      const uiChargeRatio = quantizeChargeRatio(chargeDurationMs / SHOT_METER_CONFIG.MAX_CHARGE_MS);
+      const effectiveChargeRatio = Math.max(uiChargeRatio, SHOT_METER_CONFIG.MIN_CHARGE_RATIO);
       const isPerfect =
-        chargeRatio >= SHOT_METER_CONFIG.PERFECT_WINDOW_START &&
-        chargeRatio <= SHOT_METER_CONFIG.PERFECT_WINDOW_END;
+        uiChargeRatio >= SHOT_METER_CONFIG.PERFECT_WINDOW_START &&
+        uiChargeRatio <= SHOT_METER_CONFIG.PERFECT_WINDOW_END;
 
-      shotChargeRatioRef.current = chargeRatio;
+      shotChargeRatioRef.current = uiChargeRatio;
       kickRequestedRef.current = {
-        chargeRatio,
+        uiChargeRatio,
+        effectiveChargeRatio,
         isPerfect,
       };
       emitShotChargeState({
         isCharging: false,
-        chargeRatio,
+        chargeRatio: uiChargeRatio,
         isPerfect,
         canShoot: true,
       });
@@ -279,7 +316,7 @@ function SoccerBallModel({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [emitShotChargeState, playerControlsEnabled]);
+  }, [emitShotChargeState, playerControlsEnabled, startShotCharge]);
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -464,19 +501,16 @@ function SoccerBallModel({
         shotChargingRef.current = false;
         shotChargeStartAtRef.current = 0;
         shotChargeRatioRef.current = 0;
+        pendingAutoTapRef.current = null;
         emitShotChargeState(SHOT_CHARGE_IDLE);
       } else {
         const chargeDurationMs = Math.max(0, now - shotChargeStartAtRef.current);
-        const chargeRatio = THREE.MathUtils.clamp(
-          chargeDurationMs / SHOT_METER_CONFIG.MAX_CHARGE_MS,
-          SHOT_METER_CONFIG.MIN_CHARGE_RATIO,
-          1
-        );
+        const chargeRatio = quantizeChargeRatio(chargeDurationMs / SHOT_METER_CONFIG.MAX_CHARGE_MS);
         const isPerfect =
           chargeRatio >= SHOT_METER_CONFIG.PERFECT_WINDOW_START &&
           chargeRatio <= SHOT_METER_CONFIG.PERFECT_WINDOW_END;
 
-        if (Math.abs(chargeRatio - shotChargeRatioRef.current) >= 0.01) {
+        if (Math.abs(chargeRatio - shotChargeRatioRef.current) > 0.0001) {
           shotChargeRatioRef.current = chargeRatio;
           emitShotChargeState({
             isCharging: true,
@@ -499,7 +533,7 @@ function SoccerBallModel({
         const baseLaunchSpeed = THREE.MathUtils.lerp(
           SHOT_METER_CONFIG.MIN_LAUNCH_SPEED,
           SHOT_METER_CONFIG.MAX_LAUNCH_SPEED,
-          pendingKick.chargeRatio
+          pendingKick.effectiveChargeRatio
         );
         const launchSpeedWithPerfect = baseLaunchSpeed * (pendingKick.isPerfect ? 1.1 : 1);
         const launchSpeed = Math.min(
@@ -510,7 +544,7 @@ function SoccerBallModel({
         const baseUpwardSpeed = THREE.MathUtils.lerp(
           SHOT_METER_CONFIG.MIN_UPWARD_SPEED,
           SHOT_METER_CONFIG.MAX_UPWARD_SPEED,
-          pendingKick.chargeRatio
+          pendingKick.effectiveChargeRatio
         );
         const launchUpwardSpeed =
           baseUpwardSpeed * THREE.MathUtils.clamp(shotPowerMultiplier, 1, 1.35);
@@ -524,7 +558,7 @@ function SoccerBallModel({
         emitShotChargeState(SHOT_CHARGE_IDLE);
 
         onKickRelease?.({
-          chargeRatio: pendingKick.chargeRatio,
+          chargeRatio: pendingKick.effectiveChargeRatio,
           isPerfect: pendingKick.isPerfect,
           launchSpeed,
           upwardSpeed: launchUpwardSpeed,
@@ -549,12 +583,30 @@ function SoccerBallModel({
     const touchDistance = PLAYER_POSSESSION_CONFIG.TOUCH_RADIUS + scale * 0.35;
     const targetBallHeight = playerY + Math.max(0.55, scale * PLAYER_POSSESSION_CONFIG.FOLLOW_HEIGHT_MULTIPLIER);
     const alignedByHeight = Math.abs(ballY - targetBallHeight) <= PLAYER_POSSESSION_CONFIG.HEIGHT_TOLERANCE;
+    const hadPossession = possessionRef.current;
 
-    if (!possessionRef.current && (distanceToPlayer > touchDistance || !alignedByHeight)) {
+    if (!hadPossession && (distanceToPlayer > touchDistance || !alignedByHeight)) {
       return;
     }
 
     possessionRef.current = true;
+
+    const pendingAutoTap = pendingAutoTapRef.current;
+    if (
+      !hadPossession &&
+      pendingAutoTap &&
+      spaceHeldRef.current &&
+      now <= pendingAutoTap.expiresAt
+    ) {
+      kickRequestedRef.current = {
+        uiChargeRatio: 0,
+        effectiveChargeRatio: SHOT_METER_CONFIG.MIN_CHARGE_RATIO,
+        isPerfect: false,
+      };
+      pendingAutoTapRef.current = null;
+    } else if (pendingAutoTap && now > pendingAutoTap.expiresAt) {
+      pendingAutoTapRef.current = null;
+    }
 
     const targetX = playerX + facingX * (PLAYER_POSSESSION_CONFIG.FOLLOW_OFFSET + scale * 0.35);
     const targetY = targetBallHeight;

@@ -504,7 +504,6 @@
   bottom: 0;
   border-radius: 999px;
   background: linear-gradient(90deg, #22d3ee 0%, #34d399 55%, #facc15 100%);
-  transition: width 90ms linear;
 }
 
 .shot-meter-perfect-window {

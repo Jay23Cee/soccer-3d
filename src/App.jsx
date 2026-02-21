@@ -730,20 +730,7 @@ function App() {
   }, [gameState, safeResetBall]);
 
   const handleShotChargeChange = useCallback((nextState) => {
-    setShotMeterState((current) => {
-      const normalized = createShotMeterState(nextState);
-      const changed =
-        current.isCharging !== normalized.isCharging ||
-        current.isPerfect !== normalized.isPerfect ||
-        current.canShoot !== normalized.canShoot ||
-        Math.abs(current.chargeRatio - normalized.chargeRatio) >= 0.01;
-
-      if (!changed) {
-        return current;
-      }
-
-      return normalized;
-    });
+    setShotMeterState(createShotMeterState(nextState));
   }, []);
 
   const handleKickRelease = useCallback(

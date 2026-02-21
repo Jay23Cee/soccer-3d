@@ -128,8 +128,7 @@ describe("SoccerBallModel", () => {
         kickoffRef={{ current: null }}
         controlsEnabled={false}
         playerControlsEnabled
-        playerPosition={[0, 0, 0]}
-        playerRotation={[0, 0, 0]}
+        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
         onShotChargeChange={onShotChargeChange}
         onKickRelease={onKickRelease}
       />
@@ -138,7 +137,7 @@ describe("SoccerBallModel", () => {
     stepFrame();
 
     act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: " " }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "d" }));
     });
     stepFrame();
 
@@ -163,7 +162,7 @@ describe("SoccerBallModel", () => {
 
     nowValue += 20;
     act(() => {
-      window.dispatchEvent(new KeyboardEvent("keyup", { key: " " }));
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: "d" }));
     });
     stepFrame();
 
@@ -174,12 +173,12 @@ describe("SoccerBallModel", () => {
     stepFrame();
 
     act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: " " }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "d" }));
     });
     nowValue += 900;
     stepFrame();
     act(() => {
-      window.dispatchEvent(new KeyboardEvent("keyup", { key: " " }));
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: "d" }));
     });
     stepFrame();
 
@@ -198,8 +197,7 @@ describe("SoccerBallModel", () => {
         kickoffRef={{ current: null }}
         controlsEnabled={false}
         playerControlsEnabled
-        playerPosition={[0, 0, 0]}
-        playerRotation={[0, 0, 0]}
+        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
         onKickRelease={onKickRelease}
       />
     );
@@ -207,7 +205,7 @@ describe("SoccerBallModel", () => {
     stepFrame();
 
     act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: " " }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "d" }));
     });
 
     nowValue += 150;
@@ -222,7 +220,7 @@ describe("SoccerBallModel", () => {
     );
 
     act(() => {
-      window.dispatchEvent(new KeyboardEvent("keyup", { key: " " }));
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: "d" }));
     });
   });
 
@@ -237,8 +235,7 @@ describe("SoccerBallModel", () => {
         kickoffRef={{ current: null }}
         controlsEnabled={false}
         playerControlsEnabled
-        playerPosition={[0, 0, 0]}
-        playerRotation={[0, 0, 0]}
+        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
         onKickRelease={onKickRelease}
       />
     );
@@ -246,7 +243,7 @@ describe("SoccerBallModel", () => {
     stepFrame();
 
     act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: " " }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "d" }));
     });
 
     nowValue += 260;
@@ -257,11 +254,11 @@ describe("SoccerBallModel", () => {
     expect(onKickRelease).not.toHaveBeenCalled();
 
     act(() => {
-      window.dispatchEvent(new KeyboardEvent("keyup", { key: " " }));
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: "d" }));
     });
   });
 
-  it("does not auto-tap if Space is released before possession starts", () => {
+  it("does not auto-tap if D is released before possession starts", () => {
     const onKickRelease = vi.fn();
     position = [8, 1.05, 8];
 
@@ -272,8 +269,7 @@ describe("SoccerBallModel", () => {
         kickoffRef={{ current: null }}
         controlsEnabled={false}
         playerControlsEnabled
-        playerPosition={[0, 0, 0]}
-        playerRotation={[0, 0, 0]}
+        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
         onKickRelease={onKickRelease}
       />
     );
@@ -281,11 +277,11 @@ describe("SoccerBallModel", () => {
     stepFrame();
 
     act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: " " }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "d" }));
     });
     nowValue += 90;
     act(() => {
-      window.dispatchEvent(new KeyboardEvent("keyup", { key: " " }));
+      window.dispatchEvent(new KeyboardEvent("keyup", { key: "d" }));
     });
 
     nowValue += 40;
@@ -294,5 +290,83 @@ describe("SoccerBallModel", () => {
     stepFrame();
 
     expect(onKickRelease).not.toHaveBeenCalled();
+  });
+
+  it("assigns possession to the nearest Team One player", () => {
+    const onPossessionChange = vi.fn();
+    position = [3.1, 1.05, 0];
+
+    render(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled={false}
+        playerControlsEnabled
+        teamOnePlayers={[
+          { playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] },
+          { playerId: "player_two", position: [4, 0, 0], rotation: [0, 0, 0] },
+        ]}
+        onPossessionChange={onPossessionChange}
+      />
+    );
+
+    stepFrame();
+
+    expect(onPossessionChange).toHaveBeenLastCalledWith({
+      teamId: "teamOne",
+      playerId: "player_two",
+    });
+  });
+
+  it("applies and consumes a pass command once", () => {
+    const onPassCommandConsumed = vi.fn();
+    const passCommand = {
+      id: "pass-1",
+      fromPlayerId: "player_one",
+      toPlayerId: "player_two",
+      velocity: [3, 1.2, -4],
+      issuedAtMs: 0,
+    };
+
+    const { rerender } = render(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled={false}
+        playerControlsEnabled
+        teamOnePlayers={[
+          { playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] },
+          { playerId: "player_two", position: [4, 0, 0], rotation: [0, 0, 0] },
+        ]}
+        passCommand={passCommand}
+        onPassCommandConsumed={onPassCommandConsumed}
+      />
+    );
+
+    expect(api.velocity.set).toHaveBeenCalledWith(3, 1.2, -4);
+    expect(onPassCommandConsumed).toHaveBeenCalledTimes(1);
+    expect(onPassCommandConsumed).toHaveBeenCalledWith("pass-1");
+
+    api.velocity.set.mockClear();
+    rerender(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled={false}
+        playerControlsEnabled
+        teamOnePlayers={[
+          { playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] },
+          { playerId: "player_two", position: [4, 0, 0], rotation: [0, 0, 0] },
+        ]}
+        passCommand={passCommand}
+        onPassCommandConsumed={onPassCommandConsumed}
+      />
+    );
+
+    expect(onPassCommandConsumed).toHaveBeenCalledTimes(1);
+    expect(api.velocity.set).not.toHaveBeenCalled();
   });
 });

@@ -38,17 +38,97 @@ function buildMaterials(kitVariant) {
   };
 }
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function buildPose(animationState, animationBlend, celebrationLevel) {
+  const blend = clamp(animationBlend || 0, 0, 1);
+  const celebration = clamp(celebrationLevel || 0, 0, 1);
+  const pose = {
+    torsoTilt: 0,
+    leftLeg: 0,
+    rightLeg: 0,
+    leftArm: 0,
+    rightArm: 0,
+    bodyLift: celebration * 0.08,
+  };
+
+  switch (animationState) {
+    case "track":
+      pose.leftLeg = 0.2 * blend;
+      pose.rightLeg = -0.2 * blend;
+      pose.leftArm = -0.18 * blend;
+      pose.rightArm = 0.18 * blend;
+      pose.torsoTilt = 0.06 * blend;
+      break;
+    case "intercept":
+      pose.leftLeg = 0.28 * blend;
+      pose.rightLeg = -0.1 * blend;
+      pose.leftArm = -0.24 * blend;
+      pose.rightArm = 0.22 * blend;
+      pose.torsoTilt = 0.1 * blend;
+      break;
+    case "shoot":
+      pose.leftLeg = 0.08;
+      pose.rightLeg = -0.66 * Math.max(0.35, blend);
+      pose.leftArm = -0.3;
+      pose.rightArm = 0.22;
+      pose.torsoTilt = 0.18 * Math.max(0.5, blend);
+      break;
+    case "save":
+      pose.leftLeg = 0.16;
+      pose.rightLeg = 0.16;
+      pose.leftArm = -1.05 * Math.max(0.35, blend);
+      pose.rightArm = 1.05 * Math.max(0.35, blend);
+      pose.torsoTilt = 0.22 * blend;
+      break;
+    case "distribute":
+      pose.leftLeg = 0.04;
+      pose.rightLeg = -0.14 * blend;
+      pose.leftArm = -0.18 * blend;
+      pose.rightArm = 0.56 * blend;
+      pose.torsoTilt = 0.14 * blend;
+      break;
+    case "celebrate":
+      pose.leftLeg = 0.12 * celebration;
+      pose.rightLeg = 0.12 * celebration;
+      pose.leftArm = -0.85 * celebration;
+      pose.rightArm = 0.85 * celebration;
+      pose.torsoTilt = -0.08 * celebration;
+      pose.bodyLift = 0.1 * celebration;
+      break;
+    case "run":
+    default:
+      pose.leftLeg = 0.26 * blend;
+      pose.rightLeg = -0.26 * blend;
+      pose.leftArm = -0.24 * blend;
+      pose.rightArm = 0.24 * blend;
+      pose.torsoTilt = 0.08 * blend;
+      break;
+  }
+
+  return pose;
+}
+
 function SoccerPlayer({
   position = [0, 0, 22],
   rotation = [0, Math.PI, 0],
   playerId,
   isActive = false,
   kitVariant = "primary",
+  animationState = "idle",
+  animationBlend = 0,
+  isGoalkeeper = false,
+  celebrationLevel = 0,
 }) {
   const materials = buildMaterials(kitVariant);
+  const pose = buildPose(animationState, animationBlend, celebrationLevel);
+  const rootPosition = [position[0], position[1] + pose.bodyLift, position[2]];
+  const keeperColor = kitVariant === "secondary" ? "#efb08e" : "#9fd9ff";
 
   return (
-    <group name={playerId || "player-one"} position={position} rotation={rotation}>
+    <group name={playerId || "player-one"} position={rootPosition} rotation={rotation}>
       {isActive && (
         <mesh name="active-marker" position={[0, 0.03, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
           <ringGeometry args={[0.7, 0.95, 32]} />
@@ -61,7 +141,7 @@ function SoccerPlayer({
           />
         </mesh>
       )}
-      <group name="torso" position={[0, 1.72, 0]}>
+      <group name="torso" position={[0, 1.72, 0]} rotation={[pose.torsoTilt, 0, 0]}>
         <mesh name="torso-core" {...SHADOW_PROPS}>
           <capsuleGeometry args={[0.4, 1, 8, 18]} />
           <meshStandardMaterial {...materials.jersey} />
@@ -87,7 +167,11 @@ function SoccerPlayer({
         </mesh>
       </group>
 
-      <group name="left-arm" position={[-0.57, 1.88, 0.04]} rotation={[0, 0, 0.42]}>
+      <group
+        name="left-arm"
+        position={[-0.57, 1.88, 0.04]}
+        rotation={[pose.leftArm, 0, 0.42 - pose.leftArm * 0.2]}
+      >
         <mesh name="left-sleeve" position={[0, -0.08, 0]} {...SHADOW_PROPS}>
           <cylinderGeometry args={[0.12, 0.14, 0.25, 12]} />
           <meshStandardMaterial {...materials.jersey} />
@@ -98,7 +182,11 @@ function SoccerPlayer({
         </mesh>
       </group>
 
-      <group name="right-arm" position={[0.57, 1.88, 0.04]} rotation={[0, 0, -0.42]}>
+      <group
+        name="right-arm"
+        position={[0.57, 1.88, 0.04]}
+        rotation={[pose.rightArm, 0, -0.42 + pose.rightArm * 0.2]}
+      >
         <mesh name="right-sleeve" position={[0, -0.08, 0]} {...SHADOW_PROPS}>
           <cylinderGeometry args={[0.12, 0.14, 0.25, 12]} />
           <meshStandardMaterial {...materials.jersey} />
@@ -114,7 +202,11 @@ function SoccerPlayer({
         </mesh>
       </group>
 
-      <group name="left-leg" position={[-0.23, 0.84, 0.04]} rotation={[0.02, 0, 0.07]}>
+      <group
+        name="left-leg"
+        position={[-0.23, 0.84, 0.04]}
+        rotation={[0.02 + pose.leftLeg, 0, 0.07]}
+      >
         <mesh name="left-shorts-panel" position={[0, 0.27, 0]} {...SHADOW_PROPS}>
           <cylinderGeometry args={[0.16, 0.18, 0.33, 12]} />
           <meshStandardMaterial {...materials.shorts} />
@@ -133,7 +225,11 @@ function SoccerPlayer({
         </mesh>
       </group>
 
-      <group name="right-leg" position={[0.23, 0.84, 0.04]} rotation={[-0.02, 0, -0.07]}>
+      <group
+        name="right-leg"
+        position={[0.23, 0.84, 0.04]}
+        rotation={[-0.02 + pose.rightLeg, 0, -0.07]}
+      >
         <mesh name="right-shorts-panel" position={[0, 0.27, 0]} {...SHADOW_PROPS}>
           <cylinderGeometry args={[0.16, 0.18, 0.33, 12]} />
           <meshStandardMaterial {...materials.shorts} />
@@ -151,6 +247,19 @@ function SoccerPlayer({
           <meshStandardMaterial {...materials.boots} />
         </mesh>
       </group>
+
+      {isGoalkeeper && (
+        <group name="keeper-gloves">
+          <mesh position={[-0.76, 1.38, 0.02]} {...SHADOW_PROPS}>
+            <boxGeometry args={[0.18, 0.15, 0.18]} />
+            <meshStandardMaterial color={keeperColor} roughness={0.45} metalness={0.12} />
+          </mesh>
+          <mesh position={[0.76, 1.38, 0.02]} {...SHADOW_PROPS}>
+            <boxGeometry args={[0.18, 0.15, 0.18]} />
+            <meshStandardMaterial color={keeperColor} roughness={0.45} metalness={0.12} />
+          </mesh>
+        </group>
+      )}
     </group>
   );
 }

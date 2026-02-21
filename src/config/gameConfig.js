@@ -115,11 +115,20 @@ export const POWER_PLAY_CONFIG = {
   ],
 };
 
-export const PLAYER_IDS = ["player_one", "player_two"];
+export const TEAM_ONE_PLAYER_IDS = ["player_one", "player_two"];
+export const TEAM_TWO_PLAYER_IDS = ["opponent_one", "opponent_two"];
+export const PLAYER_IDS = [...TEAM_ONE_PLAYER_IDS, ...TEAM_TWO_PLAYER_IDS];
 
 export const PLAYER_SWITCH_CONFIG = {
   KEY: "Tab",
   COOLDOWN_MS: 180,
+};
+
+export const PLAYER_PASS_CONFIG = {
+  KEY: "s",
+  COOLDOWN_MS: 220,
+  PASS_SPEED: 16,
+  PASS_LOFT: 1.2,
 };
 
 export const PLAYER_STAMINA_CONFIG = {
@@ -152,4 +161,118 @@ export const PLAYER_PROFILES = {
     startPosition: [6, 0, 22],
     startRotation: [0, Math.PI, 0],
   },
+  opponent_one: {
+    label: "Opponent One",
+    baseRunSpeed: 29,
+    sprintMultiplier: 1.05,
+    kickPowerMultiplier: 1,
+    staminaMax: 100,
+    staminaDrainPerSecSprint: 16,
+    staminaRegenPerSec: 18,
+    startPosition: [-12, 0, -22],
+    startRotation: [0, 0, 0],
+  },
+  opponent_two: {
+    label: "Opponent Two",
+    baseRunSpeed: 31,
+    sprintMultiplier: 1.08,
+    kickPowerMultiplier: 1.05,
+    staminaMax: 100,
+    staminaDrainPerSecSprint: 18,
+    staminaRegenPerSec: 16,
+    startPosition: [12, 0, -22],
+    startRotation: [0, 0, 0],
+  },
+};
+
+export const DIFFICULTY_PRESETS = {
+  easy: {
+    reactionMs: 320,
+    chaseRange: 58,
+    pressureDistance: 12,
+    shotChance: 0.32,
+    maxRunSpeedMultiplier: 0.9,
+    keeperReachMultiplier: 0.9,
+  },
+  normal: {
+    reactionMs: 240,
+    chaseRange: 68,
+    pressureDistance: 15,
+    shotChance: 0.48,
+    maxRunSpeedMultiplier: 1,
+    keeperReachMultiplier: 1,
+  },
+  hard: {
+    reactionMs: 170,
+    chaseRange: 78,
+    pressureDistance: 18,
+    shotChance: 0.65,
+    maxRunSpeedMultiplier: 1.08,
+    keeperReachMultiplier: 1.12,
+  },
+};
+
+export const AI_CONFIG = {
+  DEFAULT_DIFFICULTY: "normal",
+  UPDATE_INTERVAL_MS: 120,
+  SHOOT_DISTANCE: 25,
+  RECOVERY_MS: 650,
+  INTERCEPT_WEIGHT: 0.78,
+  IDLE_HOME_POSITION: [0, 0, -10],
+};
+
+export const GOALKEEPER_CONFIG = {
+  UPDATE_INTERVAL_MS: 80,
+  HOME_DEPTH: 72.5,
+  LATERAL_LIMIT: 16,
+  REACTION_DISTANCE: 27,
+  SAVE_RADIUS: 4.2,
+  SAVE_COOLDOWN_MS: 540,
+  DISTRIBUTE_IMPULSE: 12,
+  RESET_MS: 560,
+};
+
+export const CAMERA_CONFIG = {
+  MODES: {
+    BUILD_UP: "build-up",
+    ATTACKING_THIRD: "attacking-third",
+    SHOT: "shot",
+    GOAL: "goal",
+    SAVE: "save",
+    REPLAY: "replay",
+  },
+  BASE_HEIGHT: 64,
+  BASE_DISTANCE: 112,
+  TRANSITION_ALPHA: 0.08,
+  REPLAY_TRANSITION_ALPHA: 0.12,
+  FOV: {
+    BUILD_UP: 50,
+    ATTACKING_THIRD: 46,
+    SHOT: 43,
+    GOAL: 48,
+    SAVE: 47,
+    REPLAY: 42,
+  },
+};
+
+export const REPLAY_CONFIG = {
+  MAX_BUFFER_FRAMES: 240,
+  PRE_EVENT_FRAMES: 90,
+  POST_EVENT_FRAMES: 85,
+  FRAME_INTERVAL_MS: 1000 / 30,
+  COOLDOWN_MS: 1200,
+  STATE: {
+    IDLE: "idle",
+    ARMED: "armed",
+    PLAYING: "playing",
+    COOLDOWN: "cooldown",
+  },
+};
+
+export const MATCH_STATS_CONFIG = {
+  MOMENTUM_DECAY_PER_TICK: 0.015,
+  MOMENTUM_GOAL_SWING: 0.34,
+  MOMENTUM_SHOT_SWING: 0.08,
+  MOMENTUM_SAVE_SWING: 0.12,
+  MAX_TIMELINE_ITEMS: 10,
 };

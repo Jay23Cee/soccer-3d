@@ -5,15 +5,19 @@ Soccer 3D is a browser-based 3D soccer prototype built with React, React Three F
 ## What It Does
 
 - Renders a textured soccer field with goal models and physics colliders.
-- Spawns a controllable soccer ball (arrow keys + space).
+- Runs a single-player PvE loop (user outfield player vs AI opponent + AI goalkeepers).
+- Spawns a controllable soccer ball (arrow keys + space) with shot charge telemetry.
 - Tracks Brazil vs Argentina scoring from goal triggers.
 - Runs a timed match loop with states: idle, in play, goal scored, paused, ended.
+- Adds cinematic camera direction, instant replay state machine, momentum/possession HUD, and event ticker.
 - Supports ball reset, match restart, and out-of-bounds recovery.
 
 ## Controls
 
-- `Arrow Up/Down/Left/Right`: Move the ball
-- `Space`: Pop the ball upward
+- `Arrow Up/Down/Left/Right`: Move the active player (or ball in Ball control mode)
+- `A`: Sprint
+- `S`: Pass to teammate
+- `D`: Shoot (or pop the ball upward in Ball control mode)
 - Overlay buttons:
   - `Start Match`
   - `Pause/Resume`

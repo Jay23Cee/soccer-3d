@@ -13,20 +13,41 @@ import SoccerField from "./SoccerField";
 import SoccerBallModel from "./SoccerBallModel";
 import GoalNet from "./GoalNet";
 import SoccerPlayer from "./SoccerPlayer";
+import CameraDirector from "./camera/CameraDirector";
+import MatchStoryPanel from "./ui/MatchStoryPanel";
+import { createReplayDirector } from "./replay/ReplayDirector";
 import {
+  createInitialOpponentState,
+  OPPONENT_STATES,
+  updateOpponentController,
+} from "./ai/opponentController";
+import {
+  createInitialGoalkeeperState,
+  GOALKEEPER_STATES,
+  updateGoalkeeperController,
+} from "./ai/goalkeeperController";
+import {
+  AI_CONFIG,
   BALL_RESET_DELAY_MS,
+  CAMERA_CONFIG,
   COMBO_CONFIG,
   FIELD_CONFIG,
   GAME_STATES,
   GOAL_CONFIG,
+  GOALKEEPER_CONFIG,
   GOAL_COOLDOWN_MS,
   INTRO_CONFIG,
+  MATCH_STATS_CONFIG,
   MATCH_DURATION_SECONDS,
+  PLAYER_PASS_CONFIG,
   PLAYER_IDS,
   PLAYER_PROFILES,
   PLAYER_STAMINA_CONFIG,
   PLAYER_SWITCH_CONFIG,
+  TEAM_ONE_PLAYER_IDS,
+  TEAM_TWO_PLAYER_IDS,
   POWER_PLAY_CONFIG,
+  REPLAY_CONFIG,
   SHOT_METER_CONFIG,
 } from "./config/gameConfig";
 import "./App.css";
@@ -48,10 +69,16 @@ const CONTROL_TARGETS = {
   BALL: "ball",
 };
 
+const TEAM_IDS = {
+  TEAM_ONE: "teamOne",
+  TEAM_TWO: "teamTwo",
+};
+
 const PLAYER_BOUNDARY_MARGIN = 2;
+const PLAYER_SPRINT_KEY = "a";
 const ACTIVE_PLAYER_STRENGTHS = {
   player_one: "Kick + Speed",
-  player_two: "Stamina + Recovery",
+  player_two: "Support Runner",
 };
 
 const SHOT_METER_IDLE = {
@@ -65,6 +92,49 @@ function createShotMeterState(nextState = {}) {
   return {
     ...SHOT_METER_IDLE,
     ...nextState,
+  };
+}
+
+function createInitialMatchStats() {
+  return {
+    momentum: 0,
+    possession: {
+      teamOne: 0.5,
+      teamTwo: 0.5,
+    },
+    shots: {
+      teamOne: 0,
+      teamTwo: 0,
+    },
+    onTarget: {
+      teamOne: 0,
+      teamTwo: 0,
+    },
+    saves: {
+      teamOne: 0,
+      teamTwo: 0,
+    },
+  };
+}
+
+function createInitialCameraState() {
+  return {
+    mode: CAMERA_CONFIG.MODES.BUILD_UP,
+    position: [...INTRO_CONFIG.CAMERA_END],
+    target: [0, 0, 0],
+    fov: CAMERA_CONFIG.FOV.BUILD_UP,
+  };
+}
+
+function createInitialReplayState() {
+  return {
+    mode: REPLAY_CONFIG.STATE.IDLE,
+    isPlaying: false,
+    canSkip: false,
+    eventType: null,
+    eventId: null,
+    currentPlaybackIndex: 0,
+    totalPlaybackFrames: 0,
   };
 }
 
@@ -85,6 +155,22 @@ function createInitialPlayerStates() {
 
     return accumulator;
   }, {});
+}
+
+function createInitialOpponentStates() {
+  return TEAM_TWO_PLAYER_IDS.reduce((accumulator, playerId) => {
+    accumulator[playerId] = createInitialOpponentState(getPlayerProfile(playerId).startPosition);
+    return accumulator;
+  }, {});
+}
+
+function getNextTeamOnePlayerId(activePlayerId) {
+  const currentIndex = TEAM_ONE_PLAYER_IDS.indexOf(activePlayerId);
+  if (currentIndex === -1) {
+    return TEAM_ONE_PLAYER_IDS[0];
+  }
+
+  return TEAM_ONE_PLAYER_IDS[(currentIndex + 1) % TEAM_ONE_PLAYER_IDS.length];
 }
 
 function clampStamina(playerId, value) {
@@ -148,6 +234,10 @@ function clamp(value, min, max) {
 
 function pickRandom(items) {
   return items[Math.floor(Math.random() * items.length)];
+}
+
+function createClockLabel(timeLeftSeconds) {
+  return formatClock(timeLeftSeconds);
 }
 
 function bindMediaQueryListener(mediaQuery, listener) {
@@ -228,6 +318,7 @@ function BroadcastScoreboard({
     matchEvent?.type === "halftime" ? "is-halftime" : "",
     gameState === GAME_STATES.ENDED || matchEvent?.type === "end" ? "is-end" : "",
     matchEvent?.type === "boost" ? "is-boost" : "",
+    matchEvent?.type === "save" ? "is-save" : "",
     pulseType === "kick" ? "is-kick" : "",
   ]
     .filter(Boolean)
@@ -288,6 +379,10 @@ function MatchEventBanner({ event }) {
 
   if (event.type === "perfect_shot") {
     return <p className="match-event-banner event-perfect">PERFECT SHOT</p>;
+  }
+
+  if (event.type === "save") {
+    return <p className="match-event-banner event-save">{event.teamName.toUpperCase()} SAVE</p>;
   }
 
   return <p className="match-event-banner event-end">FULL TIME</p>;
@@ -394,6 +489,7 @@ function EndMatchScoreboard3D({ teamOneScore, teamTwoScore, teamOneName, teamTwo
 }
 
 function App() {
+  const [difficulty] = useState(AI_CONFIG.DEFAULT_DIFFICULTY);
   const [ballScale, setBallScale] = useState(1);
   const [teamOneScore, setTeamOneScore] = useState(0);
   const [teamTwoScore, setTeamTwoScore] = useState(0);
@@ -406,7 +502,7 @@ function App() {
   const [matchEvent, setMatchEvent] = useState(null);
   const [controlTarget, setControlTarget] = useState(CONTROL_TARGETS.PLAYER);
   const [playerStates, setPlayerStates] = useState(() => createInitialPlayerStates());
-  const [activePlayerId, setActivePlayerId] = useState(() => PLAYER_IDS[0]);
+  const [activePlayerId, setActivePlayerId] = useState(() => TEAM_ONE_PLAYER_IDS[0]);
   const [isSprintHeld, setIsSprintHeld] = useState(false);
   const [shotMeterState, setShotMeterState] = useState(() => createShotMeterState());
   const [comboStreak, setComboStreak] = useState(0);
@@ -416,9 +512,25 @@ function App() {
   const [cameraNudge, setCameraNudge] = useState([0, 0, 0]);
   const [qualityMode, setQualityMode] = useState(() => detectQualityMode());
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const [opponentAiStates, setOpponentAiStates] = useState(() => createInitialOpponentStates());
+  const [goalkeeperState, setGoalkeeperState] = useState(() => ({
+    teamOne: createInitialGoalkeeperState(TEAM_IDS.TEAM_ONE),
+    teamTwo: createInitialGoalkeeperState(TEAM_IDS.TEAM_TWO),
+  }));
+  const [cameraState, setCameraState] = useState(() => createInitialCameraState());
+  const [replayState, setReplayState] = useState(() => createInitialReplayState());
+  const [replayFrame, setReplayFrame] = useState(null);
+  const [matchStats, setMatchStats] = useState(() => createInitialMatchStats());
+  const [eventTimeline, setEventTimeline] = useState([]);
+  const [ballSnapshot, setBallSnapshot] = useState(null);
+  const [externalBallCommand, setExternalBallCommand] = useState(null);
+  const [passCommand, setPassCommand] = useState(null);
+  const [possessionState, setPossessionState] = useState(null);
 
   const ballResetRef = useRef(null);
   const kickoffRef = useRef(null);
+  const cameraRef = useRef(null);
+  const replayDirectorRef = useRef(createReplayDirector());
   const goalCooldownUntilRef = useRef(0);
   const goalResetTimeoutRef = useRef(null);
   const introTimeoutRef = useRef(null);
@@ -435,6 +547,11 @@ function App() {
   const comboPauseRemainingRef = useRef(0);
   const comboStreakRef = useRef(0);
   const lastPlayerSwitchAtRef = useRef(0);
+  const passCooldownUntilRef = useRef(0);
+  const matchEventIdRef = useRef(0);
+  const aiLastUpdateAtRef = useRef(0);
+  const goalkeeperLastUpdateAtRef = useRef(0);
+  const lastPossessionTickAtRef = useRef(0);
   const playerInputRef = useRef({
     ArrowUp: false,
     ArrowDown: false,
@@ -442,10 +559,11 @@ function App() {
     ArrowRight: false,
   });
 
-  const controlsEnabled = gameState === GAME_STATES.IN_PLAY;
+  const replayActive = replayState.isPlaying;
+  const controlsEnabled = gameState === GAME_STATES.IN_PLAY && !replayActive;
   const ballControlsEnabled = controlsEnabled && controlTarget === CONTROL_TARGETS.BALL;
   const playerControlsEnabled = controlsEnabled && controlTarget === CONTROL_TARGETS.PLAYER;
-  const canScore = gameState === GAME_STATES.IN_PLAY;
+  const canScore = gameState === GAME_STATES.IN_PLAY && !replayActive;
   const matchStarted = gameState !== GAME_STATES.IDLE;
   const showShotMeter = controlTarget === CONTROL_TARGETS.PLAYER;
   const shotMeterPercent = Math.round(shotMeterState.chargeRatio * 100);
@@ -490,6 +608,44 @@ function App() {
     : isSprintHeld && playerControlsEnabled
       ? "ON"
       : "OFF";
+  const playerOneAnimationState = shotMeterState.isCharging
+    ? "shoot"
+    : playerControlsEnabled && !activePlayerState.sprintLocked && isSprintHeld
+      ? "run"
+      : "track";
+  const getOpponentAnimationState = useCallback((opponentAiState) => {
+    if (!opponentAiState) {
+      return "idle";
+    }
+    if (opponentAiState.mode === OPPONENT_STATES.SHOOT) {
+      return "shoot";
+    }
+    if (opponentAiState.mode === OPPONENT_STATES.INTERCEPT) {
+      return "intercept";
+    }
+    if (opponentAiState.mode === OPPONENT_STATES.RECOVER) {
+      return "track";
+    }
+    return "idle";
+  }, []);
+  const primaryOpponentAiState = opponentAiStates[TEAM_TWO_PLAYER_IDS[0]] || createInitialOpponentState();
+  const keeperOneAnimationState =
+    goalkeeperState.teamOne.mode === GOALKEEPER_STATES.DISTRIBUTE
+      ? "distribute"
+      : goalkeeperState.teamOne.mode === GOALKEEPER_STATES.INTERCEPT
+        ? "intercept"
+        : goalkeeperState.teamOne.mode === GOALKEEPER_STATES.SAVE
+          ? "save"
+          : "idle";
+  const keeperTwoAnimationState =
+    goalkeeperState.teamTwo.mode === GOALKEEPER_STATES.DISTRIBUTE
+      ? "distribute"
+      : goalkeeperState.teamTwo.mode === GOALKEEPER_STATES.INTERCEPT
+        ? "intercept"
+        : goalkeeperState.teamTwo.mode === GOALKEEPER_STATES.SAVE
+          ? "save"
+          : "idle";
+  const celebrationLevel = gameState === GAME_STATES.GOAL_SCORED ? 0.8 : gameState === GAME_STATES.ENDED ? 1 : 0;
 
   const activeBoostConfig = activeBoost
     ? POWER_PLAY_CONFIG.TYPES[activeBoost.type] || null
@@ -503,6 +659,26 @@ function App() {
     (activeBoostConfig?.controlAssistMultiplier || 1) * appliedComboMultiplier;
   const canvasDpr = qualityMode === "mobile" ? [1, 1.2] : [1, 1.5];
   const shadowMapSize = qualityMode === "mobile" ? 512 : 1024;
+  const replayBallPosition = replayFrame?.ball?.position || null;
+  const liveBallPosition = ballSnapshot?.position || [0, 0, 0];
+  const cameraBallPosition = replayBallPosition || liveBallPosition;
+  const playerPositionsForCamera = useMemo(
+    () =>
+      PLAYER_IDS.map((playerId) => {
+        const profile = getPlayerProfile(playerId);
+        const state = playerStates[playerId];
+        return state?.position || [...profile.startPosition];
+      }),
+    [playerStates]
+  );
+  const goalkeeperPositionsForCamera = useMemo(
+    () => [goalkeeperState.teamOne.position, goalkeeperState.teamTwo.position],
+    [goalkeeperState.teamOne.position, goalkeeperState.teamTwo.position]
+  );
+  const cameraPlayerPositions =
+    replayFrame?.players?.map((player) => player.position) || playerPositionsForCamera;
+  const cameraKeeperPositions =
+    replayFrame?.keepers?.map((keeper) => keeper.position) || goalkeeperPositionsForCamera;
 
   const cameraPosition = useMemo(() => {
     const basePosition =
@@ -568,6 +744,48 @@ function App() {
     [prefersReducedMotion, qualityMode]
   );
 
+  const appendTimelineEvent = useCallback(
+    (event) => {
+      setEventTimeline((currentTimeline) =>
+        [event, ...currentTimeline].slice(0, MATCH_STATS_CONFIG.MAX_TIMELINE_ITEMS)
+      );
+    },
+    []
+  );
+
+  const updateMomentum = useCallback((teamId, swingAmount) => {
+    const swing = teamId === TEAM_IDS.TEAM_ONE ? swingAmount : -swingAmount;
+    setMatchStats((previousStats) => ({
+      ...previousStats,
+      momentum: clamp(previousStats.momentum + swing, -1, 1),
+    }));
+  }, []);
+
+  const emitTelemetryEvent = useCallback(
+    (type, payload = {}) => {
+      const nextId = `evt-${++matchEventIdRef.current}`;
+      const teamName =
+        payload.teamId === TEAM_IDS.TEAM_ONE
+          ? TEAM_ONE.name
+          : payload.teamId === TEAM_IDS.TEAM_TWO
+            ? TEAM_TWO.name
+            : payload.teamName;
+      const event = {
+        id: nextId,
+        type,
+        teamId: payload.teamId || null,
+        teamName,
+        label: payload.label || null,
+        clockLabel: createClockLabel(timeLeft),
+        createdAtMs: nowMs(),
+      };
+
+      appendTimelineEvent(event);
+      return event;
+    },
+    [appendTimelineEvent, timeLeft]
+  );
+
   const clearIntroTimers = useCallback(() => {
     if (introTimeoutRef.current) {
       clearTimeout(introTimeoutRef.current);
@@ -620,9 +838,10 @@ function App() {
   const resetPlayers = useCallback(() => {
     clearPlayerInput();
     setIsSprintHeld(false);
-    setActivePlayerId(PLAYER_IDS[0]);
+    setActivePlayerId(TEAM_ONE_PLAYER_IDS[0]);
     setPlayerStates(createInitialPlayerStates());
     lastPlayerSwitchAtRef.current = 0;
+    passCooldownUntilRef.current = 0;
   }, [clearPlayerInput]);
 
   const spawnPowerZone = useCallback(() => {
@@ -664,12 +883,30 @@ function App() {
     setActiveBoost(null);
     setBoostTimeLeftMs(0);
     setMatchEvent(null);
+    setEventTimeline([]);
     setShotMeterState(createShotMeterState());
+    setOpponentAiStates(createInitialOpponentStates());
+    setGoalkeeperState({
+      teamOne: createInitialGoalkeeperState(TEAM_IDS.TEAM_ONE),
+      teamTwo: createInitialGoalkeeperState(TEAM_IDS.TEAM_TWO),
+    });
+    setMatchStats(createInitialMatchStats());
+    setCameraState(createInitialCameraState());
+    setReplayState(createInitialReplayState());
+    setReplayFrame(null);
+    setBallSnapshot(null);
+    setExternalBallCommand(null);
+    setPassCommand(null);
+    setPossessionState(null);
     setIntroProgress(0);
     setGameState(GAME_STATES.INTRO);
     setOverlayPulseType(null);
     setCameraNudge([0, 0, 0]);
     halftimeTriggeredRef.current = false;
+    replayDirectorRef.current = createReplayDirector();
+    aiLastUpdateAtRef.current = 0;
+    goalkeeperLastUpdateAtRef.current = 0;
+    lastPossessionTickAtRef.current = nowMs();
     resetPlayers();
 
     setTimeout(() => {
@@ -688,7 +925,13 @@ function App() {
       setGameState(GAME_STATES.IN_PLAY);
       kickoffRef.current?.();
     }, INTRO_CONFIG.DURATION_MS);
-  }, [clearComboState, clearIntroTimers, clearPowerPlayTimers, resetPlayers, safeResetBall]);
+  }, [
+    clearComboState,
+    clearIntroTimers,
+    clearPowerPlayTimers,
+    resetPlayers,
+    safeResetBall,
+  ]);
 
   const skipIntro = useCallback(() => {
     if (gameState !== GAME_STATES.INTRO) {
@@ -703,6 +946,10 @@ function App() {
 
   const togglePause = useCallback(() => {
     setGameState((current) => {
+      if (replayActive) {
+        return current;
+      }
+
       if (current === GAME_STATES.IN_PLAY) {
         return GAME_STATES.PAUSED;
       }
@@ -713,7 +960,7 @@ function App() {
 
       return current;
     });
-  }, []);
+  }, [replayActive]);
 
   const movePlayer = useCallback(
     (deltaSeconds) => {
@@ -845,18 +1092,32 @@ function App() {
 
       goalCooldownUntilRef.current = now + GOAL_COOLDOWN_MS;
       setGameState(GAME_STATES.GOAL_SCORED);
+      const scoringTeamId = goalId === "teamOne" ? TEAM_IDS.TEAM_ONE : TEAM_IDS.TEAM_TWO;
 
-      if (goalId === "teamOne") {
+      if (scoringTeamId === TEAM_IDS.TEAM_ONE) {
         setTeamOneScore((prev) => prev + 1);
-      } else if (goalId === "teamTwo") {
+      } else {
         setTeamTwoScore((prev) => prev + 1);
       }
 
+      const telemetryEvent = emitTelemetryEvent("goal", { teamId: scoringTeamId });
       setMatchEvent({
         type: "goal",
-        teamName: goalId === "teamOne" ? TEAM_ONE.name : TEAM_TWO.name,
-        id: `${goalId}-${Date.now()}`,
+        teamName: telemetryEvent.teamName,
+        id: telemetryEvent.id,
       });
+      updateMomentum(scoringTeamId, MATCH_STATS_CONFIG.MOMENTUM_GOAL_SWING);
+      replayDirectorRef.current.armReplay(
+        {
+          type: "goal",
+          id: telemetryEvent.id,
+        },
+        now
+      );
+      setCameraState((previous) => ({
+        ...previous,
+        mode: CAMERA_CONFIG.MODES.GOAL,
+      }));
       triggerOverlayPulse("goal");
       triggerCameraNudge(1.1);
 
@@ -871,7 +1132,7 @@ function App() {
         );
       }, BALL_RESET_DELAY_MS);
     },
-    [canScore, safeResetBall, triggerCameraNudge, triggerOverlayPulse]
+    [canScore, emitTelemetryEvent, safeResetBall, triggerCameraNudge, triggerOverlayPulse, updateMomentum]
   );
 
   const handleOutOfBounds = useCallback(() => {
@@ -888,6 +1149,11 @@ function App() {
 
   const handleKickRelease = useCallback(
     (kickRelease) => {
+      setCameraState((previous) => ({
+        ...previous,
+        mode: CAMERA_CONFIG.MODES.SHOT,
+      }));
+
       if (!kickRelease?.isPerfect) {
         return;
       }
@@ -900,6 +1166,180 @@ function App() {
       triggerCameraNudge(0.75);
     },
     [triggerCameraNudge, triggerOverlayPulse]
+  );
+
+  const handleBallSnapshot = useCallback(
+    (snapshot) => {
+      setBallSnapshot(snapshot);
+      replayDirectorRef.current.pushFrame({
+        timestampMs: snapshot.timestampMs,
+        ball: snapshot,
+        players: PLAYER_IDS.map((playerId) => ({
+          playerId,
+          position: [...(playerStates[playerId]?.position || [0, 0, 0])],
+          rotation: [...(playerStates[playerId]?.rotation || [0, 0, 0])],
+        })),
+        keepers: [goalkeeperState.teamOne, goalkeeperState.teamTwo].map((keeper) => ({
+          teamId: keeper.teamId,
+          position: [...keeper.position],
+          rotation: [...keeper.rotation],
+        })),
+        cameraTarget: [...cameraState.target],
+      });
+    },
+    [cameraState.target, goalkeeperState.teamOne, goalkeeperState.teamTwo, playerStates]
+  );
+
+  const handlePossessionChange = useCallback(
+    (nextPossession) => {
+      setPossessionState((current) => {
+        const currentTeamId = current?.teamId || null;
+        const currentPlayerId = current?.playerId || null;
+        const nextTeamId = nextPossession?.teamId || null;
+        const nextPlayerId = nextPossession?.playerId || null;
+        if (currentTeamId === nextTeamId && currentPlayerId === nextPlayerId) {
+          return current;
+        }
+
+        if (nextTeamId) {
+          emitTelemetryEvent("possession", { teamId: nextTeamId });
+        }
+
+        return nextPossession
+          ? {
+              teamId: nextTeamId,
+              playerId: nextPlayerId,
+            }
+          : null;
+      });
+    },
+    [emitTelemetryEvent]
+  );
+
+  const handlePassCommandConsumed = useCallback((commandId) => {
+    setPassCommand((current) => (current?.id === commandId ? null : current));
+  }, []);
+
+  const triggerPass = useCallback(() => {
+    if (
+      !playerControlsEnabled ||
+      possessionState?.teamId !== TEAM_IDS.TEAM_ONE ||
+      possessionState?.playerId !== activePlayerId
+    ) {
+      return;
+    }
+
+    const now = nowMs();
+    if (now < passCooldownUntilRef.current) {
+      return;
+    }
+
+    const receiverId = getNextTeamOnePlayerId(activePlayerId);
+    if (receiverId === activePlayerId) {
+      return;
+    }
+
+    const passerState = playerStates[activePlayerId];
+    const receiverState = playerStates[receiverId];
+    if (!passerState || !receiverState) {
+      return;
+    }
+
+    const [fromX, , fromZ] = passerState.position;
+    const [toX, , toZ] = receiverState.position;
+    let directionX = toX - fromX;
+    let directionZ = toZ - fromZ;
+    const distance = Math.hypot(directionX, directionZ);
+    if (distance > 0.0001) {
+      directionX /= distance;
+      directionZ /= distance;
+    } else {
+      const yaw = Number.isFinite(passerState.rotation?.[1]) ? passerState.rotation[1] : 0;
+      directionX = Math.sin(yaw);
+      directionZ = Math.cos(yaw);
+    }
+
+    const velocity = [
+      directionX * PLAYER_PASS_CONFIG.PASS_SPEED,
+      PLAYER_PASS_CONFIG.PASS_LOFT,
+      directionZ * PLAYER_PASS_CONFIG.PASS_SPEED,
+    ];
+    const commandId = `pass-${activePlayerId}-${receiverId}-${Math.round(now)}`;
+    setPassCommand({
+      id: commandId,
+      fromPlayerId: activePlayerId,
+      toPlayerId: receiverId,
+      velocity,
+      issuedAtMs: now,
+    });
+    setActivePlayerId(receiverId);
+    passCooldownUntilRef.current = now + PLAYER_PASS_CONFIG.COOLDOWN_MS;
+    lastPlayerSwitchAtRef.current = now;
+  }, [
+    activePlayerId,
+    playerControlsEnabled,
+    playerStates,
+    possessionState?.playerId,
+    possessionState?.teamId,
+  ]);
+
+  const handleShotEvent = useCallback(
+    (shotEvent) => {
+      if (!shotEvent || !shotEvent.type) {
+        return;
+      }
+
+      const eventType = shotEvent.type === "save" ? "save" : "shot";
+      const teamId = shotEvent.teamId || TEAM_IDS.TEAM_ONE;
+
+      if (eventType === "shot") {
+        setMatchStats((previousStats) => ({
+          ...previousStats,
+          shots: {
+            ...previousStats.shots,
+            [teamId]: (previousStats.shots[teamId] || 0) + 1,
+          },
+          onTarget: {
+            ...previousStats.onTarget,
+            [teamId]: (previousStats.onTarget[teamId] || 0) + 1,
+          },
+        }));
+        updateMomentum(teamId, MATCH_STATS_CONFIG.MOMENTUM_SHOT_SWING);
+        emitTelemetryEvent("shot", { teamId });
+        setCameraState((previous) => ({
+          ...previous,
+          mode: CAMERA_CONFIG.MODES.SHOT,
+        }));
+      } else {
+        const keeperTeamId = shotEvent.teamId || TEAM_IDS.TEAM_ONE;
+        setMatchStats((previousStats) => ({
+          ...previousStats,
+          saves: {
+            ...previousStats.saves,
+            [keeperTeamId]: (previousStats.saves[keeperTeamId] || 0) + 1,
+          },
+        }));
+        updateMomentum(keeperTeamId, MATCH_STATS_CONFIG.MOMENTUM_SAVE_SWING);
+        const telemetryEvent = emitTelemetryEvent("save", { teamId: keeperTeamId });
+        setMatchEvent({
+          type: "save",
+          teamName: telemetryEvent.teamName,
+          id: telemetryEvent.id,
+        });
+        replayDirectorRef.current.armReplay(
+          {
+            type: "save",
+            id: telemetryEvent.id,
+          },
+          nowMs()
+        );
+        setCameraState((previous) => ({
+          ...previous,
+          mode: CAMERA_CONFIG.MODES.SAVE,
+        }));
+      }
+    },
+    [emitTelemetryEvent, updateMomentum]
   );
 
   const handlePowerZoneEnter = useCallback(
@@ -966,6 +1406,275 @@ function App() {
   }, [comboStreak]);
 
   useEffect(() => {
+    const timer = setInterval(() => {
+      const now = nowMs();
+      const nextReplayState = replayDirectorRef.current.update(now);
+      setReplayState(nextReplayState);
+      setReplayFrame(replayDirectorRef.current.getCurrentFrame());
+    }, 33);
+
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (gameState !== GAME_STATES.IN_PLAY || replayActive) {
+      return undefined;
+    }
+
+    const timer = setInterval(() => {
+      setMatchStats((previousStats) => {
+        const teamOneTarget =
+          possessionState?.teamId === TEAM_IDS.TEAM_ONE
+            ? 0.72
+            : possessionState?.teamId === TEAM_IDS.TEAM_TWO
+              ? 0.28
+              : 0.5;
+        const nextTeamOnePossession = clamp(
+          lerp(previousStats.possession.teamOne, teamOneTarget, 0.08),
+          0.06,
+          0.94
+        );
+        const nextMomentum = lerp(
+          previousStats.momentum,
+          0,
+          MATCH_STATS_CONFIG.MOMENTUM_DECAY_PER_TICK
+        );
+
+        return {
+          ...previousStats,
+          momentum: nextMomentum,
+          possession: {
+            teamOne: nextTeamOnePossession,
+            teamTwo: 1 - nextTeamOnePossession,
+          },
+        };
+      });
+    }, 250);
+
+    return () => clearInterval(timer);
+  }, [gameState, possessionState?.teamId, replayActive]);
+
+  useEffect(() => {
+    if (gameState !== GAME_STATES.IN_PLAY || replayActive) {
+      return undefined;
+    }
+
+    const timer = setInterval(() => {
+      if (!ballSnapshot) {
+        return;
+      }
+
+      const now = nowMs();
+      const deltaSeconds =
+        aiLastUpdateAtRef.current > 0
+          ? Math.max(0.01, (now - aiLastUpdateAtRef.current) / 1000)
+          : AI_CONFIG.UPDATE_INTERVAL_MS / 1000;
+      aiLastUpdateAtRef.current = now;
+
+      setPlayerStates((currentStates) => {
+        const nextOpponentAiStates = {};
+        let shotCommand = null;
+        let nextStates = currentStates;
+        let hasPlayerStateChange = false;
+
+        TEAM_TWO_PLAYER_IDS.forEach((opponentId) => {
+          const opponentPlayer = currentStates[opponentId];
+          if (!opponentPlayer) {
+            nextOpponentAiStates[opponentId] = createInitialOpponentState(
+              getPlayerProfile(opponentId).startPosition
+            );
+            return;
+          }
+
+          const nearestTeamOnePlayer = TEAM_ONE_PLAYER_IDS.map((playerId) => currentStates[playerId]).reduce(
+            (closest, candidate) => {
+              if (!candidate) {
+                return closest;
+              }
+              if (!closest) {
+                return candidate;
+              }
+              const candidateDistance = Math.hypot(
+                opponentPlayer.position[0] - candidate.position[0],
+                opponentPlayer.position[2] - candidate.position[2]
+              );
+              const closestDistance = Math.hypot(
+                opponentPlayer.position[0] - closest.position[0],
+                opponentPlayer.position[2] - closest.position[2]
+              );
+              return candidateDistance < closestDistance ? candidate : closest;
+            },
+            null
+          );
+
+          const nextAI = updateOpponentController({
+            nowMs: now,
+            deltaSeconds,
+            difficulty,
+            ballSnapshot,
+            playerState: nearestTeamOnePlayer,
+            opponentState: opponentPlayer,
+            homePosition: getPlayerProfile(opponentId).startPosition,
+          });
+
+          nextOpponentAiStates[opponentId] = nextAI;
+
+          if (!shotCommand && nextAI.shootRequested && nextAI.shotVector) {
+            shotCommand = {
+              id: `ai-shot-${opponentId}-${now}`,
+              type: "impulse",
+              vector: [nextAI.shotVector[0] * 11, 1.8, nextAI.shotVector[2] * 11],
+              event: {
+                type: "shot",
+                teamId: TEAM_IDS.TEAM_TWO,
+                releasedAtMs: now,
+              },
+            };
+          }
+
+          const nextPosition = nextAI.nextPosition || opponentPlayer.position;
+          const nextRotation = nextAI.nextRotation || opponentPlayer.rotation;
+          if (!hasPlayerStateChange) {
+            const positionChanged =
+              !opponentPlayer.position ||
+              Math.abs(opponentPlayer.position[0] - nextPosition[0]) > 0.0001 ||
+              Math.abs(opponentPlayer.position[2] - nextPosition[2]) > 0.0001;
+            const rotationChanged =
+              !opponentPlayer.rotation ||
+              Math.abs(opponentPlayer.rotation[1] - nextRotation[1]) > 0.0001;
+            hasPlayerStateChange = positionChanged || rotationChanged;
+          }
+
+          if (hasPlayerStateChange) {
+            if (nextStates === currentStates) {
+              nextStates = { ...currentStates };
+            }
+            nextStates[opponentId] = {
+              ...opponentPlayer,
+              position: nextPosition,
+              rotation: nextRotation,
+            };
+          }
+        });
+
+        setOpponentAiStates((current) => ({
+          ...current,
+          ...nextOpponentAiStates,
+        }));
+
+        if (shotCommand) {
+          setExternalBallCommand(shotCommand);
+        }
+
+        return nextStates;
+      });
+    }, AI_CONFIG.UPDATE_INTERVAL_MS);
+
+    return () => clearInterval(timer);
+  }, [ballSnapshot, difficulty, gameState, replayActive]);
+
+  useEffect(() => {
+    if (gameState !== GAME_STATES.IN_PLAY || replayActive) {
+      return undefined;
+    }
+
+    const timer = setInterval(() => {
+      if (!ballSnapshot) {
+        return;
+      }
+
+      const now = nowMs();
+      const deltaSeconds =
+        goalkeeperLastUpdateAtRef.current > 0
+          ? Math.max(0.01, (now - goalkeeperLastUpdateAtRef.current) / 1000)
+          : GOALKEEPER_CONFIG.UPDATE_INTERVAL_MS / 1000;
+      goalkeeperLastUpdateAtRef.current = now;
+
+      setGoalkeeperState((currentState) => {
+        const nextTeamOne = updateGoalkeeperController({
+          nowMs: now,
+          deltaSeconds,
+          difficulty,
+          keeperState: currentState.teamOne,
+          ballSnapshot,
+        });
+        const nextTeamTwo = updateGoalkeeperController({
+          nowMs: now,
+          deltaSeconds,
+          difficulty,
+          keeperState: currentState.teamTwo,
+          ballSnapshot,
+        });
+
+        const saveKeeper = nextTeamOne.saveRequested
+          ? nextTeamOne
+          : nextTeamTwo.saveRequested
+            ? nextTeamTwo
+            : null;
+
+        if (saveKeeper?.distributeImpulse) {
+          setExternalBallCommand({
+            id: `keeper-save-${saveKeeper.teamId}-${now}`,
+            type: "velocity",
+            vector: saveKeeper.distributeImpulse.map((value, index) =>
+              index === 1 ? value * 10 : value
+            ),
+            event: {
+              type: "save",
+              teamId: saveKeeper.teamId,
+              releasedAtMs: now,
+            },
+          });
+        }
+
+        return {
+          teamOne: nextTeamOne,
+          teamTwo: nextTeamTwo,
+        };
+      });
+    }, GOALKEEPER_CONFIG.UPDATE_INTERVAL_MS);
+
+    return () => clearInterval(timer);
+  }, [ballSnapshot, difficulty, gameState, replayActive]);
+
+  useEffect(() => {
+    if (replayState.isPlaying || gameState !== GAME_STATES.IN_PLAY) {
+      return;
+    }
+
+    const ballZ = ballSnapshot?.position?.[2] || 0;
+    const speed = ballSnapshot?.velocity
+      ? Math.hypot(
+          ballSnapshot.velocity[0],
+          ballSnapshot.velocity[1],
+          ballSnapshot.velocity[2]
+        )
+      : 0;
+
+    let nextMode = CAMERA_CONFIG.MODES.BUILD_UP;
+    if (Math.abs(ballZ) > FIELD_CONFIG.LENGTH * 0.25) {
+      nextMode = CAMERA_CONFIG.MODES.ATTACKING_THIRD;
+    }
+    if (speed > 16) {
+      nextMode = CAMERA_CONFIG.MODES.SHOT;
+    }
+
+    setCameraState((previous) => (previous.mode === nextMode ? previous : { ...previous, mode: nextMode }));
+  }, [ballSnapshot, gameState, replayState.isPlaying]);
+
+  useEffect(() => {
+    if (!replayState.isPlaying) {
+      return;
+    }
+
+    setCameraState((previous) =>
+      previous.mode === CAMERA_CONFIG.MODES.REPLAY
+        ? previous
+        : { ...previous, mode: CAMERA_CONFIG.MODES.REPLAY }
+    );
+  }, [replayState.isPlaying]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return undefined;
     }
@@ -1005,7 +1714,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (gameState !== GAME_STATES.IN_PLAY) {
+    if (gameState !== GAME_STATES.IN_PLAY || replayActive) {
       return undefined;
     }
 
@@ -1021,7 +1730,7 @@ function App() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [gameState]);
+  }, [gameState, replayActive]);
 
   useEffect(() => {
     const halfTimeMark = Math.ceil(MATCH_DURATION_SECONDS / 2);
@@ -1131,30 +1840,26 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (event) => {
-      if (event.key === PLAYER_SWITCH_CONFIG.KEY) {
-        if (controlTarget !== CONTROL_TARGETS.PLAYER || !matchStarted) {
-          return;
-        }
-
-        const now = nowMs();
-        if (
-          lastPlayerSwitchAtRef.current > 0 &&
-          now - lastPlayerSwitchAtRef.current < PLAYER_SWITCH_CONFIG.COOLDOWN_MS
-        ) {
-          event.preventDefault();
-          return;
-        }
-
+      if ((event.key === "r" || event.key === "R") && replayState.canSkip) {
         event.preventDefault();
+        replayDirectorRef.current.skip(nowMs());
+        return;
+      }
+
+      if (event.key === PLAYER_SWITCH_CONFIG.KEY) {
+        event.preventDefault();
+        if (!playerControlsEnabled) {
+          return;
+        }
+        if (possessionState?.teamId === TEAM_IDS.TEAM_ONE) {
+          return;
+        }
+        const now = nowMs();
+        if (now - lastPlayerSwitchAtRef.current < PLAYER_SWITCH_CONFIG.COOLDOWN_MS) {
+          return;
+        }
+        setActivePlayerId((current) => getNextTeamOnePlayerId(current));
         lastPlayerSwitchAtRef.current = now;
-        clearPlayerInput();
-        setIsSprintHeld(false);
-        setShotMeterState(createShotMeterState());
-        setActivePlayerId((currentPlayerId) => {
-          const currentIndex = PLAYER_IDS.indexOf(currentPlayerId);
-          const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % PLAYER_IDS.length;
-          return PLAYER_IDS[nextIndex];
-        });
         return;
       }
 
@@ -1162,7 +1867,18 @@ function App() {
         return;
       }
 
-      if (event.key === "Shift") {
+      const normalizedKey = typeof event.key === "string" ? event.key.toLowerCase() : "";
+
+      if (normalizedKey === PLAYER_PASS_CONFIG.KEY) {
+        event.preventDefault();
+        if (event.repeat) {
+          return;
+        }
+        triggerPass();
+        return;
+      }
+
+      if (normalizedKey === PLAYER_SPRINT_KEY) {
         event.preventDefault();
         setIsSprintHeld(true);
         return;
@@ -1177,7 +1893,8 @@ function App() {
     };
 
     const handleKeyUp = (event) => {
-      if (event.key === "Shift") {
+      const normalizedKey = typeof event.key === "string" ? event.key.toLowerCase() : "";
+      if (normalizedKey === PLAYER_SPRINT_KEY) {
         setIsSprintHeld(false);
         return;
       }
@@ -1203,7 +1920,13 @@ function App() {
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", handleWindowBlur);
     };
-  }, [clearPlayerInput, controlTarget, matchStarted, playerControlsEnabled]);
+  }, [
+    clearPlayerInput,
+    playerControlsEnabled,
+    possessionState?.teamId,
+    replayState.canSkip,
+    triggerPass,
+  ]);
 
   useEffect(() => {
     if (!playerControlsEnabled) {
@@ -1296,7 +2019,10 @@ function App() {
       <div className={`overlay${overlayPulseType ? ` pulse-${overlayPulseType}` : ""}`}>
         <div className="overlay-header">
           <h1>Soccer 3D</h1>
-          <p className="status-label">Status: {statusText(gameState)}</p>
+          <p className="status-label">
+            Status: {statusText(gameState)}
+            {replayState.isPlaying ? " | Replay" : ""}
+          </p>
         </div>
 
         <p className="fixture-label">
@@ -1361,7 +2087,7 @@ function App() {
                   ? shotMeterState.isPerfect
                     ? "Perfect window"
                     : "Charging shot"
-                  : "Hold Space, release to shoot"
+                  : "Hold D, release to shoot"
                 : "Shot meter activates during live player control"}
             </small>
           </div>
@@ -1433,6 +2159,7 @@ function App() {
               className={gameState === GAME_STATES.PAUSED ? "btn-primary" : "btn-warning"}
               onClick={togglePause}
               type="button"
+              disabled={replayState.isPlaying}
             >
               {gameState === GAME_STATES.PAUSED ? "Resume" : "Pause"}
             </button>
@@ -1453,10 +2180,18 @@ function App() {
 
         <p className="help-text">
           {controlTarget === CONTROL_TARGETS.PLAYER
-            ? `Controls: Arrow keys move the active player. Hold Shift to sprint. Press ${PLAYER_SWITCH_CONFIG.KEY} to switch players. Touch the ball to dribble, hold Space to charge, release to kick.`
-            : "Controls: Arrow keys move the ball and Space pops it upward. Switch to Player mode to run the player."}{" "}
-          Capture power-play zones quickly to build combo multipliers.
+            ? "Controls: Arrow keys move your player. Hold A to sprint. Touch the ball to dribble, hold D to charge, release to kick. Press S to pass to your teammate. Press Tab to switch players when Team One has no possession."
+            : "Controls: Arrow keys move the ball and D pops it upward. Switch to Player mode to run the player."}{" "}
+          Capture power-play zones quickly to build combo multipliers. Press R to skip replay.
         </p>
+
+        <MatchStoryPanel
+          matchStats={matchStats}
+          eventTimeline={eventTimeline}
+          replayState={replayState}
+          aiState={primaryOpponentAiState}
+          difficulty={difficulty}
+        />
       </div>
 
       <Canvas
@@ -1465,7 +2200,20 @@ function App() {
         style={{ height: "100vh", width: "100vw" }}
         gl={{ antialias: true }}
       >
-        <PerspectiveCamera makeDefault position={cameraPosition} fov={cameraFov} />
+        <PerspectiveCamera ref={cameraRef} makeDefault position={cameraPosition} fov={cameraFov} />
+        <CameraDirector
+          cameraRef={cameraRef}
+          mode={cameraState.mode}
+          ballPosition={cameraBallPosition}
+          playerPositions={cameraPlayerPositions}
+          goalkeeperPositions={cameraKeeperPositions}
+          replayFrame={replayFrame}
+          isReplay={replayState.isPlaying}
+          introProgress={introProgress}
+          gameState={gameState}
+          cameraNudge={cameraNudge}
+          onCameraStateChange={setCameraState}
+        />
         <fog attach="fog" args={["#04101f", 120, 410]} />
         <hemisphereLight skyColor="#8ed4ff" groundColor="#1f2c42" intensity={0.62} />
         <directionalLight
@@ -1479,7 +2227,7 @@ function App() {
 
         <OrbitControls
           enablePan
-          enabled={gameState !== GAME_STATES.INTRO}
+          enabled={gameState !== GAME_STATES.INTRO && !replayState.isPlaying}
           maxPolarAngle={Math.PI / 2}
           minPolarAngle={0}
           maxDistance={340}
@@ -1490,21 +2238,75 @@ function App() {
         <Suspense fallback={<LoadingFallback />}>
           <Physics gravity={[0, -9.81, 0]} iterations={12} tolerance={0.0001}>
             <SoccerField activePowerZone={activePowerZone} />
-            {PLAYER_IDS.map((playerId, index) => {
+            {PLAYER_IDS.map((playerId) => {
               const profile = getPlayerProfile(playerId);
+              const replayPlayer = replayFrame?.players?.find((item) => item.playerId === playerId);
               const playerState = playerStates[playerId] || {
                 position: [...profile.startPosition],
                 rotation: [...profile.startRotation],
               };
+              const renderedPosition = replayPlayer?.position || playerState.position;
+              const renderedRotation = replayPlayer?.rotation || playerState.rotation;
+              const isTeamOnePlayer = TEAM_ONE_PLAYER_IDS.includes(playerId);
+              const opponentAiState = opponentAiStates[playerId];
+              const animationState = isTeamOnePlayer
+                ? playerId === activePlayerId
+                  ? playerOneAnimationState
+                  : "track"
+                : getOpponentAnimationState(opponentAiState);
+              const animationBlend = isTeamOnePlayer
+                ? playerId === activePlayerId && playerControlsEnabled && isSprintHeld
+                  ? 1
+                  : 0.35
+                : opponentAiState?.mode === OPPONENT_STATES.INTERCEPT
+                  ? 0.9
+                  : opponentAiState?.mode === OPPONENT_STATES.TRACK
+                    ? 0.7
+                    : 0.2;
 
               return (
                 <SoccerPlayer
                   key={playerId}
                   playerId={playerId}
-                  position={playerState.position}
-                  rotation={playerState.rotation}
-                  isActive={playerId === activePlayerId}
-                  kitVariant={index === 0 ? "primary" : "secondary"}
+                  position={renderedPosition}
+                  rotation={renderedRotation}
+                  isActive={playerId === activePlayerId && isTeamOnePlayer}
+                  kitVariant={isTeamOnePlayer ? "primary" : "secondary"}
+                  animationState={animationState}
+                  animationBlend={animationBlend}
+                  celebrationLevel={celebrationLevel}
+                />
+              );
+            })}
+
+            {[
+              { id: "keeper-team-one", teamKey: TEAM_IDS.TEAM_ONE, kitVariant: "primary" },
+              { id: "keeper-team-two", teamKey: TEAM_IDS.TEAM_TWO, kitVariant: "secondary" },
+            ].map((keeperEntry) => {
+              const keeper = goalkeeperState[keeperEntry.teamKey];
+              const replayKeeper = replayFrame?.keepers?.find(
+                (entry) => entry.teamId === keeperEntry.teamKey
+              );
+
+
+              
+
+              return (
+                <SoccerPlayer
+                  key={keeperEntry.id}
+                  playerId={keeperEntry.id}
+                  position={replayKeeper?.position || keeper.position}
+                  rotation={replayKeeper?.rotation || keeper.rotation}
+                  isActive={false}
+                  kitVariant={keeperEntry.kitVariant}
+                  animationState={
+                    keeperEntry.teamKey === TEAM_IDS.TEAM_ONE
+                      ? keeperOneAnimationState
+                      : keeperTwoAnimationState
+                  }
+                  animationBlend={0.9}
+                  isGoalkeeper
+                  celebrationLevel={celebrationLevel * 0.5}
                 />
               );
             })}
@@ -1515,10 +2317,16 @@ function App() {
                 scale={ballScale}
                 resetRef={ballResetRef}
                 kickoffRef={kickoffRef}
+                externalBallCommand={externalBallCommand}
                 controlsEnabled={ballControlsEnabled}
-                playerPosition={activePlayerState.position}
-                playerRotation={activePlayerState.rotation}
+                teamOnePlayers={TEAM_ONE_PLAYER_IDS.map((playerId) => ({
+                  playerId,
+                  position: playerStates[playerId]?.position || getPlayerProfile(playerId).startPosition,
+                  rotation: playerStates[playerId]?.rotation || getPlayerProfile(playerId).startRotation,
+                }))}
                 playerControlsEnabled={playerControlsEnabled}
+                passCommand={passCommand}
+                onPassCommandConsumed={handlePassCommandConsumed}
                 onOutOfBounds={handleOutOfBounds}
                 activePowerZone={activePowerZone}
                 onPowerZoneEnter={handlePowerZoneEnter}
@@ -1527,6 +2335,11 @@ function App() {
                 controlAssistMultiplier={controlAssistMultiplier}
                 onShotChargeChange={handleShotChargeChange}
                 onKickRelease={handleKickRelease}
+                onBallSnapshot={handleBallSnapshot}
+                onPossessionChange={handlePossessionChange}
+                onShotEvent={handleShotEvent}
+                replayActive={replayState.isPlaying}
+                replayFrameBall={replayFrame?.ball || null}
               />
             )}
 
@@ -1567,7 +2380,12 @@ function App() {
         </Suspense>
       </Canvas>
     </div>
+
   );
+
+  
 }
+
+
 
 export default App;

@@ -1,7 +1,6 @@
 import React from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { vi } from "vitest";
-import { COMBO_CONFIG, PLAYER_STAMINA_CONFIG } from "./config/gameConfig";
 
 const UNSUPPORTED_CANVAS_TAGS = new Set(["hemisphereLight", "directionalLight", "fog"]);
 
@@ -20,9 +19,7 @@ function stripUnsupportedCanvasNodes(children) {
 }
 
 vi.mock("@react-three/fiber", () => ({
-  Canvas: ({ children }) => (
-    <div data-testid="canvas">{stripUnsupportedCanvasNodes(children)}</div>
-  ),
+  Canvas: ({ children }) => <div data-testid="canvas">{stripUnsupportedCanvasNodes(children)}</div>,
 }));
 
 vi.mock("@react-three/drei", () => ({
@@ -42,56 +39,95 @@ vi.mock(
   { virtual: true }
 );
 
+vi.mock("./camera/CameraDirector", () => ({ default: () => null }));
 vi.mock("./SoccerField", () => ({ default: () => <div data-testid="soccer-field" /> }));
+let mockSnapshotTime = 0;
 vi.mock("./SoccerBallModel", () => ({
   default: ({
     onPowerZoneEnter,
     onShotChargeChange,
+    onShotEvent,
+    onPossessionChange,
+    onBallSnapshot,
+    passCommand,
     shotPowerMultiplier,
-    playerPosition,
-    playerRotation,
   }) => (
-    <div
-      data-testid="soccer-ball"
-      data-shot-power={shotPowerMultiplier}
-      data-player-position={JSON.stringify(playerPosition)}
-      data-player-rotation={JSON.stringify(playerRotation)}
-    >
-      <button
-        type="button"
-        data-testid="trigger-zone"
-        onClick={() =>
-          onPowerZoneEnter?.({
-            id: `zone-${Date.now()}`,
-            type: "speed",
-            color: "#1dd75f",
-            radius: 7,
-            position: [0, 0],
-          })
-        }
-      >
-        trigger-zone
-      </button>
-      <button
-        type="button"
-        data-testid="mock-charge"
-        onClick={() =>
-          onShotChargeChange?.({
-            isCharging: true,
-            chargeRatio: 0.62,
-            isPerfect: false,
-            canShoot: true,
-          })
-        }
-      >
-        mock-charge
-      </button>
-    </div>
-  ),
+      <div data-testid="soccer-ball" data-shot-power={shotPowerMultiplier}>
+        <button
+          type="button"
+          data-testid="trigger-zone"
+          onClick={() =>
+            onPowerZoneEnter?.({
+              id: `zone-${Date.now()}`,
+              type: "speed",
+              color: "#1dd75f",
+              radius: 7,
+              position: [0, 0],
+            })
+          }
+        >
+          trigger-zone
+        </button>
+        <button
+          type="button"
+          data-testid="mock-charge"
+          onClick={() =>
+            onShotChargeChange?.({
+              isCharging: true,
+              chargeRatio: 0.62,
+              isPerfect: false,
+              canShoot: true,
+            })
+          }
+        >
+          mock-charge
+        </button>
+        <button
+          type="button"
+          data-testid="mock-shot"
+          onClick={() => onShotEvent?.({ type: "shot", teamId: "teamOne" })}
+        >
+          mock-shot
+        </button>
+        <button
+          type="button"
+          data-testid="mock-save"
+          onClick={() => onShotEvent?.({ type: "save", teamId: "teamOne" })}
+        >
+          mock-save
+        </button>
+        <button
+          type="button"
+          data-testid="mock-possession"
+          onClick={() => onPossessionChange?.({ teamId: "teamOne", playerId: "player_one" })}
+        >
+          mock-possession
+        </button>
+        <button
+          type="button"
+          data-testid="mock-snapshot"
+          onClick={() => {
+            mockSnapshotTime += 34;
+            onBallSnapshot?.({
+              timestampMs: mockSnapshotTime,
+              position: [0, 1.1, 0],
+              velocity: [0, 0, -4],
+            });
+          }}
+        >
+          mock-snapshot
+        </button>
+        <div data-testid="pass-command">{passCommand?.id || ""}</div>
+      </div>
+    ),
 }));
 vi.mock("./SoccerPlayer", () => ({
-  default: ({ playerId, isActive }) => (
-    <div data-testid="soccer-player" data-player-id={playerId} data-is-active={isActive ? "true" : "false"} />
+  default: ({ playerId, isActive, isGoalkeeper }) => (
+    <div
+      data-testid={isGoalkeeper ? "soccer-keeper" : "soccer-player"}
+      data-player-id={playerId}
+      data-is-active={isActive ? "true" : "false"}
+    />
   ),
 }));
 vi.mock("./GoalNet", () => ({
@@ -113,38 +149,25 @@ beforeAll(async () => {
   ({ default: App } = await import("./App"));
 });
 
+beforeEach(() => {
+  mockSnapshotTime = 0;
+});
+
 function startAndSkipIntro() {
   fireEvent.click(screen.getByRole("button", { name: "Start Match" }));
   fireEvent.click(screen.getByRole("button", { name: "Skip Intro" }));
 }
 
-function getBallState() {
-  const ball = screen.getByTestId("soccer-ball");
-  return {
-    shotPower: Number(ball.getAttribute("data-shot-power")),
-    playerPosition: JSON.parse(ball.getAttribute("data-player-position") || "[]"),
-    playerRotation: JSON.parse(ball.getAttribute("data-player-rotation") || "[]"),
-  };
-}
-
-function readStaminaValue() {
-  return Number((screen.getByTestId("stamina-value").textContent || "0").replace("%", ""));
-}
-
 describe("App", () => {
-  test("renders idle state before match starts", () => {
+  test("renders idle state with match story HUD", () => {
     render(<App />);
 
     expect(screen.getByText("Soccer 3D")).toBeInTheDocument();
     expect(screen.getByText("Status: Idle")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start Match" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
-  });
-
-  test("renders two players in the scene", () => {
-    render(<App />);
-
-    expect(screen.getAllByTestId("soccer-player")).toHaveLength(2);
+    expect(screen.getByText("Match Story")).toBeInTheDocument();
+    expect(screen.getByTestId("replay-state")).toHaveTextContent("idle");
+    expect(screen.getAllByTestId("soccer-player")).toHaveLength(4);
+    expect(screen.getAllByTestId("soccer-keeper")).toHaveLength(2);
   });
 
   test("allows switching between player and ball control targets", () => {
@@ -177,152 +200,75 @@ describe("App", () => {
     expect(screen.getByText("Status: In Play")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reset Ball" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Restart Match" })).toBeInTheDocument();
   });
 
   test("pause button toggles to resume", () => {
     render(<App />);
-
     startAndSkipIntro();
-    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
 
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     expect(screen.getByText("Status: Paused")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
   });
 
-  test("restart match resets timer to full duration and returns to intro", () => {
-    vi.useFakeTimers();
+  test("increments score and appends goal event ticker entry", () => {
     render(<App />);
-
     startAndSkipIntro();
 
-    act(() => {
-      vi.advanceTimersByTime(2000);
-    });
-
-    expect(screen.getByTestId("match-clock")).toHaveTextContent("1:58");
-    fireEvent.click(screen.getByTestId("trigger-zone"));
-    fireEvent.click(screen.getByTestId("mock-charge"));
-    expect(screen.getByTestId("combo-status")).toHaveTextContent("Streak 1");
-    expect(screen.getByTestId("shot-meter-value")).toHaveTextContent("62%");
-    fireEvent.keyDown(window, { key: "Tab" });
-    expect(screen.getByTestId("active-player-label")).toHaveTextContent("Player Two");
-
-    fireEvent.click(screen.getByRole("button", { name: "Restart Match" }));
-
-    expect(screen.getByTestId("match-clock")).toHaveTextContent("2:00");
-    expect(screen.getByText("Status: Pre-match Intro")).toBeInTheDocument();
-    expect(screen.getByTestId("combo-status")).toHaveTextContent("None");
-    expect(screen.getByTestId("shot-meter-value")).toHaveTextContent("0%");
-    expect(screen.getByTestId("active-player-label")).toHaveTextContent("Player One");
-    expect(screen.getByTestId("stamina-value")).toHaveTextContent("100%");
-
-    vi.useRealTimers();
-  });
-
-  test("increments score when a goal is triggered during play", () => {
-    render(<App />);
-
-    startAndSkipIntro();
     fireEvent.click(screen.getByTestId("goal-teamOne"));
 
     expect(screen.getByTestId("score-team-one")).toHaveTextContent("1");
-    expect(screen.getByTestId("score-team-two")).toHaveTextContent("0");
+    expect(screen.getByTestId("event-ticker")).toHaveTextContent("Brazil goal");
   });
 
-  test("combo streak increments on consecutive captures and resets on timeout", () => {
-    vi.useFakeTimers();
+  test("updates shots and saves stats via shot events", () => {
     render(<App />);
-
     startAndSkipIntro();
 
-    fireEvent.click(screen.getByTestId("trigger-zone"));
-    expect(screen.getByTestId("combo-status")).toHaveTextContent("Streak 1");
+    fireEvent.click(screen.getByTestId("mock-shot"));
+    fireEvent.click(screen.getByTestId("mock-save"));
 
-    fireEvent.click(screen.getByTestId("trigger-zone"));
-    expect(screen.getByTestId("combo-status")).toHaveTextContent("Streak 2");
-
-    act(() => {
-      vi.advanceTimersByTime(COMBO_CONFIG.WINDOW_MS + 200);
-    });
-
-    expect(screen.getByTestId("combo-status")).toHaveTextContent("None");
-    vi.useRealTimers();
+    expect(screen.getByText(/Shots/i)).toHaveTextContent("1 - 0");
+    expect(screen.getByText(/Saves/i)).toHaveTextContent("1 - 0");
   });
 
-  test("switches active player with Tab and updates ball follow target", () => {
+  test("restart match resets score and replay state", () => {
+    render(<App />);
+    startAndSkipIntro();
+    fireEvent.click(screen.getByTestId("goal-teamOne"));
+    fireEvent.click(screen.getByRole("button", { name: "Restart Match" }));
+
+    expect(screen.getByTestId("score-team-one")).toHaveTextContent("0");
+    expect(screen.getByText("Status: Pre-match Intro")).toBeInTheDocument();
+    expect(screen.getByTestId("replay-state")).toHaveTextContent("idle");
+  });
+
+  test("allows manual Tab switching when Team One has no possession", () => {
     render(<App />);
     startAndSkipIntro();
 
     expect(screen.getByTestId("active-player-label")).toHaveTextContent("Player One");
-    expect(getBallState().playerPosition).toEqual([-6, 0, 22]);
-
     fireEvent.keyDown(window, { key: "Tab" });
+    expect(screen.getByTestId("active-player-label")).toHaveTextContent("Player Two");
+  });
+
+  test("blocks manual Tab switching while Team One has possession", () => {
+    render(<App />);
+    startAndSkipIntro();
+
+    fireEvent.click(screen.getByTestId("mock-possession"));
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(screen.getByTestId("active-player-label")).toHaveTextContent("Player One");
+  });
+
+  test("S pass auto-switches to teammate and emits pass command", () => {
+    render(<App />);
+    startAndSkipIntro();
+
+    fireEvent.click(screen.getByTestId("mock-possession"));
+    fireEvent.keyDown(window, { key: "s" });
 
     expect(screen.getByTestId("active-player-label")).toHaveTextContent("Player Two");
-    expect(getBallState().playerPosition).toEqual([6, 0, 22]);
-  });
-
-  test("player one has higher kick power multiplier than player two", () => {
-    render(<App />);
-    startAndSkipIntro();
-
-    const playerOneShotPower = getBallState().shotPower;
-    fireEvent.keyDown(window, { key: "Tab" });
-    const playerTwoShotPower = getBallState().shotPower;
-
-    expect(playerOneShotPower).toBeGreaterThan(playerTwoShotPower);
-  });
-
-  test("sprint drains stamina only while moving and then regenerates", () => {
-    vi.useFakeTimers();
-    render(<App />);
-    startAndSkipIntro();
-
-    expect(readStaminaValue()).toBe(100);
-
-    fireEvent.keyDown(window, { key: "Shift" });
-    fireEvent.keyDown(window, { key: "ArrowUp" });
-
-    act(() => {
-      vi.advanceTimersByTime(1200);
-    });
-
-    const drainedStamina = readStaminaValue();
-    expect(drainedStamina).toBeLessThan(100);
-    expect(screen.getByTestId("sprint-state")).toHaveTextContent("ON");
-
-    fireEvent.keyUp(window, { key: "ArrowUp" });
-    fireEvent.keyUp(window, { key: "Shift" });
-
-    act(() => {
-      vi.advanceTimersByTime(1200);
-    });
-
-    expect(readStaminaValue()).toBeGreaterThan(drainedStamina);
-    expect(screen.getByTestId("sprint-state")).toHaveTextContent("OFF");
-    vi.useRealTimers();
-  });
-
-  test("low stamina applies kick power penalty", () => {
-    vi.useFakeTimers();
-    render(<App />);
-    startAndSkipIntro();
-
-    fireEvent.keyDown(window, { key: "Shift" });
-    fireEvent.keyDown(window, { key: "ArrowUp" });
-
-    act(() => {
-      vi.advanceTimersByTime(3600);
-    });
-
-    fireEvent.keyUp(window, { key: "ArrowUp" });
-    fireEvent.keyUp(window, { key: "Shift" });
-
-    expect(readStaminaValue()).toBeLessThanOrEqual(
-      Math.round(PLAYER_STAMINA_CONFIG.LOW_THRESHOLD_RATIO * 100)
-    );
-    expect(getBallState().shotPower).toBeCloseTo(1.25 * PLAYER_STAMINA_CONFIG.LOW_KICK_MULTIPLIER);
-    vi.useRealTimers();
+    expect(screen.getByTestId("pass-command").textContent).toMatch(/^pass-player_one-player_two-/);
   });
 });

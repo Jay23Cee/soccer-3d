@@ -5,15 +5,14 @@ import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { BALL_BODY_NAME, BALL_CONFIG } from "./config/gameConfig";
 
-const PLAYER_CONTACT_CONFIG = {
-  RADIUS: 1.45,
-  HEIGHT_OFFSET: 1.1,
-  HEIGHT_TOLERANCE: 1.8,
-  MIN_MOVEMENT_SPEED: 1.25,
-  IMPULSE_MIN: 0.45,
-  IMPULSE_MAX: 1.6,
-  IMPULSE_COOLDOWN_MS: 80,
-  LIFT_IMPULSE: 0.04,
+const PLAYER_POSSESSION_CONFIG = {
+  TOUCH_RADIUS: 1.75,
+  HEIGHT_TOLERANCE: 2.2,
+  FOLLOW_OFFSET: 1.2,
+  FOLLOW_HEIGHT_MULTIPLIER: 1.02,
+  KICK_FORWARD_IMPULSE: 6.8,
+  KICK_UPWARD_IMPULSE: 0.9,
+  REACQUIRE_COOLDOWN_MS: 300,
 };
 
 function getNowMs() {
@@ -31,6 +30,7 @@ function SoccerBallModel({
   controlsEnabled,
   playerPosition = [0, 0, 0],
   playerRotation = [0, Math.PI, 0],
+  playerControlsEnabled = false,
   onOutOfBounds,
   activePowerZone,
   onPowerZoneEnter,
@@ -55,8 +55,9 @@ function SoccerBallModel({
   const velocityRef = useRef([0, 0, 0]);
   const ballPositionRef = useRef([...BALL_CONFIG.SPAWN_POSITION]);
   const directionRef = useRef([0, 0, 0]);
-  const lastPlayerPositionRef = useRef([...playerPosition]);
-  const lastTouchImpulseAtRef = useRef(0);
+  const kickRequestedRef = useRef(false);
+  const possessionRef = useRef(false);
+  const possessionLockUntilRef = useRef(0);
   const outOfBoundsLockRef = useRef(false);
   const outOfBoundsTimerRef = useRef(null);
   const triggeredZoneIdRef = useRef(null);
@@ -79,16 +80,21 @@ function SoccerBallModel({
 
   const resetBall = useCallback(() => {
     directionRef.current = [0, 0, 0];
+    kickRequestedRef.current = false;
+    possessionRef.current = false;
+    possessionLockUntilRef.current = 0;
     outOfBoundsLockRef.current = false;
     triggeredZoneIdRef.current = null;
     ballPositionRef.current = [...BALL_CONFIG.SPAWN_POSITION];
-    lastTouchImpulseAtRef.current = 0;
     api.position.set(...BALL_CONFIG.SPAWN_POSITION);
     api.velocity.set(0, 0, 0);
     api.angularVelocity.set(0, 0, 0);
   }, [api]);
 
   const kickoffBall = useCallback(() => {
+    kickRequestedRef.current = false;
+    possessionRef.current = false;
+    possessionLockUntilRef.current = getNowMs() + PLAYER_POSSESSION_CONFIG.REACQUIRE_COOLDOWN_MS;
     const directionSign = Math.random() > 0.5 ? 1 : -1;
     api.applyImpulse([0, 2.2 * shotPowerMultiplier, directionSign * 8], [0, 0, 0]);
   }, [api, shotPowerMultiplier]);
@@ -128,6 +134,32 @@ function SoccerBallModel({
       directionRef.current = [0, 0, 0];
     }
   }, [controlsEnabled]);
+
+  useEffect(() => {
+    if (playerControlsEnabled) {
+      return;
+    }
+
+    kickRequestedRef.current = false;
+    possessionRef.current = false;
+  }, [playerControlsEnabled]);
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (!playerControlsEnabled || event.key !== " ") {
+        return;
+      }
+
+      event.preventDefault();
+      kickRequestedRef.current = true;
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [playerControlsEnabled]);
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -232,7 +264,7 @@ function SoccerBallModel({
     };
   }, [activePowerZone, api, onOutOfBounds, onPowerZoneEnter]);
 
-  useFrame((_, delta) => {
+  useFrame(() => {
     const [vx, vy, vz] = velocityRef.current;
     const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
     const boostedMaxSpeed = BALL_CONFIG.MAX_SPEED * (speedMultiplier > 1 ? 1.35 : 1);
@@ -268,51 +300,54 @@ function SoccerBallModel({
       }
     }
 
-    const [ballX, ballY, ballZ] = ballPositionRef.current;
-    const [playerX, playerY, playerZ] = playerPosition;
-    const [previousPlayerX, , previousPlayerZ] = lastPlayerPositionRef.current;
-    const playerTravelDistance = Math.hypot(playerX - previousPlayerX, playerZ - previousPlayerZ);
-    const playerPlanarSpeed = playerTravelDistance / Math.max(delta, 0.0001);
-    lastPlayerPositionRef.current = [playerX, playerY, playerZ];
-
-    if (playerPlanarSpeed < PLAYER_CONTACT_CONFIG.MIN_MOVEMENT_SPEED) {
-      return;
-    }
-
-    const distanceToPlayer = Math.hypot(ballX - playerX, ballZ - playerZ);
-    const touchDistance = PLAYER_CONTACT_CONFIG.RADIUS + scale;
-    const playerBodyHeight = playerY + PLAYER_CONTACT_CONFIG.HEIGHT_OFFSET;
-    const alignedByHeight =
-      Math.abs(ballY - playerBodyHeight) <= PLAYER_CONTACT_CONFIG.HEIGHT_TOLERANCE;
-
-    if (distanceToPlayer > touchDistance || !alignedByHeight) {
-      return;
-    }
-
     const now = getNowMs();
-    if (now - lastTouchImpulseAtRef.current < PLAYER_CONTACT_CONFIG.IMPULSE_COOLDOWN_MS) {
-      return;
-    }
-
     const yaw = Number.isFinite(playerRotation?.[1]) ? playerRotation[1] : 0;
     const facingX = Math.sin(yaw);
     const facingZ = Math.cos(yaw);
-    const playerSpeedFactor = Math.min(1, playerPlanarSpeed / 16);
-    const impulseMagnitude = THREE.MathUtils.lerp(
-      PLAYER_CONTACT_CONFIG.IMPULSE_MIN,
-      PLAYER_CONTACT_CONFIG.IMPULSE_MAX,
-      playerSpeedFactor
-    );
 
-    api.applyImpulse(
-      [
-        facingX * impulseMagnitude,
-        PLAYER_CONTACT_CONFIG.LIFT_IMPULSE,
-        facingZ * impulseMagnitude,
-      ],
-      [0, 0, 0]
-    );
-    lastTouchImpulseAtRef.current = now;
+    if (kickRequestedRef.current) {
+      kickRequestedRef.current = false;
+
+      if (possessionRef.current) {
+        possessionRef.current = false;
+        possessionLockUntilRef.current = now + PLAYER_POSSESSION_CONFIG.REACQUIRE_COOLDOWN_MS;
+
+        api.applyImpulse(
+          [
+            facingX * PLAYER_POSSESSION_CONFIG.KICK_FORWARD_IMPULSE * shotPowerMultiplier,
+            PLAYER_POSSESSION_CONFIG.KICK_UPWARD_IMPULSE * shotPowerMultiplier,
+            facingZ * PLAYER_POSSESSION_CONFIG.KICK_FORWARD_IMPULSE * shotPowerMultiplier,
+          ],
+          [0, 0, 0]
+        );
+      }
+    }
+
+    if (!playerControlsEnabled || now < possessionLockUntilRef.current) {
+      return;
+    }
+
+    const [ballX, ballY, ballZ] = ballPositionRef.current;
+    const [playerX, playerY, playerZ] = playerPosition;
+    const distanceToPlayer = Math.hypot(ballX - playerX, ballZ - playerZ);
+    const touchDistance = PLAYER_POSSESSION_CONFIG.TOUCH_RADIUS + scale * 0.35;
+    const targetBallHeight = playerY + Math.max(0.55, scale * PLAYER_POSSESSION_CONFIG.FOLLOW_HEIGHT_MULTIPLIER);
+    const alignedByHeight = Math.abs(ballY - targetBallHeight) <= PLAYER_POSSESSION_CONFIG.HEIGHT_TOLERANCE;
+
+    if (!possessionRef.current && (distanceToPlayer > touchDistance || !alignedByHeight)) {
+      return;
+    }
+
+    possessionRef.current = true;
+
+    const targetX = playerX + facingX * (PLAYER_POSSESSION_CONFIG.FOLLOW_OFFSET + scale * 0.35);
+    const targetY = targetBallHeight;
+    const targetZ = playerZ + facingZ * (PLAYER_POSSESSION_CONFIG.FOLLOW_OFFSET + scale * 0.35);
+
+    api.position.set(targetX, targetY, targetZ);
+    api.velocity.set(0, 0, 0);
+    api.angularVelocity.set(0, 0, 0);
+    ballPositionRef.current = [targetX, targetY, targetZ];
   });
 
   return (

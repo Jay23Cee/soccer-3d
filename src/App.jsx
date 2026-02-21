@@ -884,7 +884,7 @@ function App() {
 
         <p className="help-text">
           {controlTarget === CONTROL_TARGETS.PLAYER
-            ? "Controls: Arrow keys move the player. Switch to Ball mode to move and pop the ball with Space."
+            ? "Controls: Arrow keys move the player. Touch the ball to dribble it, then press Space to kick it forward."
             : "Controls: Arrow keys move the ball and Space pops it upward. Switch to Player mode to run the player."}{" "}
           Capture power-play zones for boosts.
         </p>
@@ -931,6 +931,7 @@ function App() {
                 controlsEnabled={ballControlsEnabled}
                 playerPosition={playerPosition}
                 playerRotation={playerRotation}
+                playerControlsEnabled={playerControlsEnabled}
                 onOutOfBounds={handleOutOfBounds}
                 activePowerZone={activePowerZone}
                 onPowerZoneEnter={handlePowerZoneEnter}

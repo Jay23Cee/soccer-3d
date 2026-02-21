@@ -1,38 +1,129 @@
-.App {
+:root {
+  --panel-bg: rgba(10, 16, 20, 0.82);
+  --panel-border: rgba(255, 255, 255, 0.14);
+  --text-main: #f6fbff;
+  --text-muted: #c9d9e4;
+  --accent: #17c964;
+  --accent-hover: #14b058;
+  --button-bg: #12222c;
+  --button-hover: #193441;
+}
+
+.overlay {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  z-index: 20;
+  width: min(360px, calc(100vw - 2rem));
+  background: var(--panel-bg);
+  color: var(--text-main);
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  padding: 1rem;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.overlay h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.35rem;
+  letter-spacing: 0.02em;
+}
+
+.status-label {
+  margin: 0 0 0.65rem;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.scoreboard {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.scoreboard p {
+  margin: 0;
+  padding: 0.45rem;
+  border-radius: 10px;
   text-align: center;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 0.9rem;
 }
 
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
+.slider-wrap {
+  display: block;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+  color: var(--text-muted);
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
+.slider-wrap input {
+  width: 100%;
+  margin-top: 0.35rem;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 0.5rem;
+}
+
+.controls button {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+  color: var(--text-main);
+  background: var(--button-bg);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.controls button:hover {
+  background: var(--button-hover);
+}
+
+.controls button:first-child {
+  background: var(--accent);
+  border-color: transparent;
+  color: #041008;
+  font-weight: 600;
+}
+
+.controls button:first-child:hover {
+  background: var(--accent-hover);
+}
+
+.help-text {
+  margin: 0.75rem 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.loading-pill {
+  padding: 0.65rem 0.85rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  color: var(--text-main);
+  background: rgba(0, 0, 0, 0.58);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+@media (max-width: 640px) {
+  .overlay {
+    left: 0.5rem;
+    top: 0.5rem;
+    width: calc(100vw - 1rem);
+    padding: 0.8rem;
   }
-}
 
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
-  color: white;
-}
-
-.App-link {
-  color: #61dafb;
-}
-
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
+  .scoreboard {
+    grid-template-columns: 1fr;
   }
-  to {
-    transform: rotate(360deg);
+
+  .controls {
+    grid-template-columns: 1fr;
   }
 }

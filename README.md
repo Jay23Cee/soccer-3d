@@ -1,70 +1,61 @@
-# Getting Started with Create React App
+# Soccer 3D
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+Soccer 3D is a browser-based 3D soccer prototype built with React, React Three Fiber, and Cannon physics.
 
-## Available Scripts
+## What It Does
 
-In the project directory, you can run:
+- Renders a textured soccer field with goal models and physics colliders.
+- Spawns a controllable soccer ball (arrow keys + space).
+- Tracks Team 1 vs Team 2 scoring from goal triggers.
+- Runs a timed match loop with states: idle, in play, goal scored, paused, ended.
+- Supports ball reset, match restart, and out-of-bounds recovery.
 
-### `npm start`
+## Controls
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+- `Arrow Up/Down/Left/Right`: Move the ball
+- `Space`: Pop the ball upward
+- Overlay buttons:
+  - `Start Match`
+  - `Pause/Resume`
+  - `Reset Ball`
+  - `Restart Match`
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## Tech Stack
 
-### `npm test`
+- `react`
+- `@react-three/fiber`
+- `@react-three/drei`
+- `@react-three/cannon`
+- `three`
+- `vite`
+- `vitest`
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+## Project Structure
 
-### `npm run build`
+- `src/App.jsx`: Main game loop, state machine, score/timer UI.
+- `src/SoccerBallModel.jsx`: Ball physics, controls, velocity capping, out-of-bounds handling.
+- `src/GoalNet.jsx`: Goal model + frame colliders + ball-only trigger scoring.
+- `src/SoccerField.jsx`: Field mesh, markings, and arena boundary colliders.
+- `src/main.jsx`: Vite entry point for React rendering.
+- `src/config/gameConfig.js`: Gameplay and physics constants.
+- `docs/ASSETS.md`: Asset usage and attribution details.
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+## Scripts
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+- `npm start`: Run development server (alias of `npm run dev`).
+- `npm run dev`: Run development server.
+- `npm run build`: Create production build.
+- `npm run preview`: Preview production build locally.
+- `npm test`: Run tests in watch mode with Vitest.
+- `npm run test:ci`: Run tests once for CI.
+- `npm run lint`: Run ESLint on `src`.
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+## Notes
 
-### `npm run eject`
+- Runtime public assets were reduced to only files used by the app.
+- Non-runtime archives/executables were removed from deploy payload.
+- Tests mock R3F/Cannon components so they run in jsdom reliably.
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+## Asset Attribution
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+See `docs/ASSETS.md`.

@@ -14,14 +14,14 @@ const GRASS_TEXTURES = [
 
 const TRACK_CONFIG = {
   WIDTH: 12, // wider track while keeping about five lanes
-  COLOR: "#8a634f",
+  COLOR: "#2c2445",
   LANE_COUNT: 5,
-  LANE_COLOR: "#c9b2a3",
+  LANE_COLOR: "#5ea3d8",
 };
 
 const FIELD_BORDER_CONFIG = {
-  COLOR: "#efe8dd",
-  OPACITY: 0.82,
+  COLOR: "#c8f6ff",
+  OPACITY: 0.9,
 };
 
 function BoundaryWall({ position, args }) {
@@ -89,14 +89,20 @@ function SoccerField({ activePowerZone }) {
 
     const pulse = 1 + Math.sin(clock.elapsedTime * 5.5) * 0.1;
     powerZoneRef.current.scale.set(pulse, pulse, pulse);
-    powerZoneMaterialRef.current.emissiveIntensity = 0.95 + Math.sin(clock.elapsedTime * 8) * 0.45;
+    powerZoneMaterialRef.current.emissiveIntensity = 1.2 + Math.sin(clock.elapsedTime * 8) * 0.55;
   });
 
   return (
     <>
       <mesh position={[0, -0.02, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
         <shapeGeometry args={[trackShape]} />
-        <meshStandardMaterial color={TRACK_CONFIG.COLOR} roughness={0.94} metalness={0.08} />
+        <meshStandardMaterial
+          color={TRACK_CONFIG.COLOR}
+          emissive="#0f1230"
+          emissiveIntensity={0.36}
+          roughness={0.86}
+          metalness={0.12}
+        />
       </mesh>
 
       <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
@@ -108,7 +114,14 @@ function SoccerField({ activePowerZone }) {
           displacementMap={grassDisplacement}
           displacementScale={0.08}
           roughness={0.8}
+          emissive="#06222c"
+          emissiveIntensity={0.22}
         />
+      </mesh>
+
+      <mesh position={[0, MARKING_OFFSET_Y - 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[11.2, 12.4, 64]} />
+        <meshBasicMaterial color="#22d3ee" transparent opacity={0.13} side={THREE.DoubleSide} />
       </mesh>
 
       <group>

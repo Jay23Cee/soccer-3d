@@ -1,8 +1,9 @@
 import React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { vi } from "vitest";
+import { COMBO_CONFIG } from "./config/gameConfig";
 
-const UNSUPPORTED_CANVAS_TAGS = new Set(["hemisphereLight", "directionalLight"]);
+const UNSUPPORTED_CANVAS_TAGS = new Set(["hemisphereLight", "directionalLight", "fog"]);
 
 function stripUnsupportedCanvasNodes(children) {
   return React.Children.map(children, (child) => {
@@ -42,7 +43,41 @@ vi.mock(
 );
 
 vi.mock("./SoccerField", () => ({ default: () => <div data-testid="soccer-field" /> }));
-vi.mock("./SoccerBallModel", () => ({ default: () => <div data-testid="soccer-ball" /> }));
+vi.mock("./SoccerBallModel", () => ({
+  default: ({ onPowerZoneEnter, onShotChargeChange }) => (
+    <div data-testid="soccer-ball">
+      <button
+        type="button"
+        data-testid="trigger-zone"
+        onClick={() =>
+          onPowerZoneEnter?.({
+            id: `zone-${Date.now()}`,
+            type: "speed",
+            color: "#1dd75f",
+            radius: 7,
+            position: [0, 0],
+          })
+        }
+      >
+        trigger-zone
+      </button>
+      <button
+        type="button"
+        data-testid="mock-charge"
+        onClick={() =>
+          onShotChargeChange?.({
+            isCharging: true,
+            chargeRatio: 0.62,
+            isPerfect: false,
+            canShoot: true,
+          })
+        }
+      >
+        mock-charge
+      </button>
+    </div>
+  ),
+}));
 vi.mock("./SoccerPlayer", () => ({ default: () => <div data-testid="soccer-player" /> }));
 vi.mock("./GoalNet", () => ({
   default: ({ goalId, onGoal, active }) => (
@@ -81,11 +116,13 @@ describe("App", () => {
 
     expect(playerControlButton).toHaveAttribute("aria-pressed", "true");
     expect(ballControlButton).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("shot-meter")).toBeInTheDocument();
 
     fireEvent.click(ballControlButton);
 
     expect(playerControlButton).toHaveAttribute("aria-pressed", "false");
     expect(ballControlButton).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByTestId("shot-meter")).not.toBeInTheDocument();
   });
 
   test("starts match into intro and can skip to in-play controls", () => {
@@ -127,11 +164,17 @@ describe("App", () => {
     });
 
     expect(screen.getByTestId("match-clock")).toHaveTextContent("1:58");
+    fireEvent.click(screen.getByTestId("trigger-zone"));
+    fireEvent.click(screen.getByTestId("mock-charge"));
+    expect(screen.getByTestId("combo-status")).toHaveTextContent("Streak 1");
+    expect(screen.getByTestId("shot-meter-value")).toHaveTextContent("62%");
 
     fireEvent.click(screen.getByRole("button", { name: "Restart Match" }));
 
     expect(screen.getByTestId("match-clock")).toHaveTextContent("2:00");
     expect(screen.getByText("Status: Pre-match Intro")).toBeInTheDocument();
+    expect(screen.getByTestId("combo-status")).toHaveTextContent("None");
+    expect(screen.getByTestId("shot-meter-value")).toHaveTextContent("0%");
 
     vi.useRealTimers();
   });
@@ -145,5 +188,26 @@ describe("App", () => {
 
     expect(screen.getByTestId("score-team-one")).toHaveTextContent("1");
     expect(screen.getByTestId("score-team-two")).toHaveTextContent("0");
+  });
+
+  test("combo streak increments on consecutive captures and resets on timeout", () => {
+    vi.useFakeTimers();
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Match" }));
+    fireEvent.click(screen.getByRole("button", { name: "Skip Intro" }));
+
+    fireEvent.click(screen.getByTestId("trigger-zone"));
+    expect(screen.getByTestId("combo-status")).toHaveTextContent("Streak 1");
+
+    fireEvent.click(screen.getByTestId("trigger-zone"));
+    expect(screen.getByTestId("combo-status")).toHaveTextContent("Streak 2");
+
+    act(() => {
+      vi.advanceTimersByTime(COMBO_CONFIG.WINDOW_MS + 200);
+    });
+
+    expect(screen.getByTestId("combo-status")).toHaveTextContent("None");
+    vi.useRealTimers();
   });
 });

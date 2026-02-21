@@ -1,8 +1,0 @@
-Model Information:
-* title:	Generic Soccer Ball
-* source:	https://sketchfab.com/3d-models/generic-soccer-ball-c01c0245bed24349a4914a03c5791188
-* author:	assetfactory (https://sketchfab.com/assetfactory)
-
-Model License:
-* license type:	SKETCHFAB Standard (https://sketchfab.com/licenses)
-* requirements:	Under basic restrictions, use worldwide, on all types of media, commercially or not, and in all types of derivative works

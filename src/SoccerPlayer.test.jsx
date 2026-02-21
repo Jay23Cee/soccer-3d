@@ -62,4 +62,26 @@ describe("SoccerPlayer", () => {
       expect(findElementByName(player, meshName)).toBeTruthy();
     });
   });
+
+  it("uses playerId as root group name when provided", () => {
+    const player = SoccerPlayer({ playerId: "player_two" });
+
+    expect(player.props.name).toBe("player_two");
+  });
+
+  it("uses secondary kit colors when kitVariant is secondary", () => {
+    const player = SoccerPlayer({ kitVariant: "secondary" });
+    const torsoMesh = findElementByName(player, "torso-core");
+    const torsoMaterial = elementChildren(torsoMesh).find(
+      (child) => child?.type === "meshStandardMaterial"
+    );
+
+    expect(torsoMaterial.props.color).toBe("#f97316");
+  });
+
+  it("renders an active marker when isActive is true", () => {
+    const player = SoccerPlayer({ isActive: true });
+
+    expect(findElementByName(player, "active-marker")).toBeTruthy();
+  });
 });

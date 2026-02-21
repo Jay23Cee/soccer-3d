@@ -22,6 +22,10 @@ import {
   GOAL_COOLDOWN_MS,
   INTRO_CONFIG,
   MATCH_DURATION_SECONDS,
+  PLAYER_IDS,
+  PLAYER_PROFILES,
+  PLAYER_STAMINA_CONFIG,
+  PLAYER_SWITCH_CONFIG,
   POWER_PLAY_CONFIG,
   SHOT_METER_CONFIG,
 } from "./config/gameConfig";
@@ -44,10 +48,11 @@ const CONTROL_TARGETS = {
   BALL: "ball",
 };
 
-const PLAYER_START_POSITION = [0, 0, 22];
-const PLAYER_START_ROTATION = [0, Math.PI, 0];
-const PLAYER_CONTROL_SPEED = 32;
 const PLAYER_BOUNDARY_MARGIN = 2;
+const ACTIVE_PLAYER_STRENGTHS = {
+  player_one: "Kick + Speed",
+  player_two: "Stamina + Recovery",
+};
 
 const SHOT_METER_IDLE = {
   isCharging: false,
@@ -61,6 +66,61 @@ function createShotMeterState(nextState = {}) {
     ...SHOT_METER_IDLE,
     ...nextState,
   };
+}
+
+function getPlayerProfile(playerId) {
+  return PLAYER_PROFILES[playerId] || PLAYER_PROFILES[PLAYER_IDS[0]];
+}
+
+function createInitialPlayerStates() {
+  return PLAYER_IDS.reduce((accumulator, playerId) => {
+    const profile = getPlayerProfile(playerId);
+
+    accumulator[playerId] = {
+      position: [...profile.startPosition],
+      rotation: [...profile.startRotation],
+      stamina: profile.staminaMax,
+      sprintLocked: false,
+    };
+
+    return accumulator;
+  }, {});
+}
+
+function clampStamina(playerId, value) {
+  const maxStamina = getPlayerProfile(playerId).staminaMax;
+  return clamp(value, 0, maxStamina);
+}
+
+function getStaminaRatio(playerId, stamina) {
+  const maxStamina = getPlayerProfile(playerId).staminaMax;
+
+  if (maxStamina <= 0) {
+    return 0;
+  }
+
+  return clamp(stamina / maxStamina, 0, 1);
+}
+
+function isLowStamina(staminaRatio) {
+  return staminaRatio <= PLAYER_STAMINA_CONFIG.LOW_THRESHOLD_RATIO;
+}
+
+function computeMovementSpeed(profile, staminaRatio, sprinting, sprintLocked) {
+  const sprintMultiplier = sprinting && !sprintLocked ? profile.sprintMultiplier : 1;
+  const lowStaminaMultiplier = isLowStamina(staminaRatio)
+    ? PLAYER_STAMINA_CONFIG.LOW_SPEED_MULTIPLIER
+    : 1;
+
+  return profile.baseRunSpeed * sprintMultiplier * lowStaminaMultiplier;
+}
+
+function computeKickMultiplier(profile, staminaRatio) {
+  const lowStaminaMultiplier = isLowStamina(staminaRatio)
+    ? PLAYER_STAMINA_CONFIG.LOW_KICK_MULTIPLIER
+    : 1;
+
+  return profile.kickPowerMultiplier * lowStaminaMultiplier;
 }
 
 function formatClock(totalSeconds) {
@@ -345,8 +405,9 @@ function App() {
   const [boostTimeLeftMs, setBoostTimeLeftMs] = useState(0);
   const [matchEvent, setMatchEvent] = useState(null);
   const [controlTarget, setControlTarget] = useState(CONTROL_TARGETS.PLAYER);
-  const [playerPosition, setPlayerPosition] = useState([...PLAYER_START_POSITION]);
-  const [playerRotation, setPlayerRotation] = useState([...PLAYER_START_ROTATION]);
+  const [playerStates, setPlayerStates] = useState(() => createInitialPlayerStates());
+  const [activePlayerId, setActivePlayerId] = useState(() => PLAYER_IDS[0]);
+  const [isSprintHeld, setIsSprintHeld] = useState(false);
   const [shotMeterState, setShotMeterState] = useState(() => createShotMeterState());
   const [comboStreak, setComboStreak] = useState(0);
   const [comboMultiplier, setComboMultiplier] = useState(1);
@@ -373,6 +434,7 @@ function App() {
   const comboExpiresAtRef = useRef(0);
   const comboPauseRemainingRef = useRef(0);
   const comboStreakRef = useRef(0);
+  const lastPlayerSwitchAtRef = useRef(0);
   const playerInputRef = useRef({
     ArrowUp: false,
     ArrowDown: false,
@@ -400,13 +462,43 @@ function App() {
     }),
     []
   );
+  const activeProfile = getPlayerProfile(activePlayerId);
+  const activePlayerState = playerStates[activePlayerId] || {
+    position: [...activeProfile.startPosition],
+    rotation: [...activeProfile.startRotation],
+    stamina: activeProfile.staminaMax,
+    sprintLocked: false,
+  };
+  const activeStaminaRatio = getStaminaRatio(activePlayerId, activePlayerState.stamina);
+  const activeStaminaPercent = Math.round(activeStaminaRatio * 100);
+  const activeMovementSpeed = computeMovementSpeed(
+    activeProfile,
+    activeStaminaRatio,
+    isSprintHeld,
+    activePlayerState.sprintLocked
+  );
+  const activeKickMultiplierFromStamina = computeKickMultiplier(activeProfile, activeStaminaRatio);
+  const activePlayerStrength = ACTIVE_PLAYER_STRENGTHS[activePlayerId] || "Balanced";
+  const staminaToneClass =
+    activeStaminaRatio <= PLAYER_STAMINA_CONFIG.LOW_THRESHOLD_RATIO
+      ? "is-low"
+      : activeStaminaRatio <= 0.5
+        ? "is-medium"
+        : "";
+  const sprintStatusLabel = activePlayerState.sprintLocked
+    ? "LOCKED"
+    : isSprintHeld && playerControlsEnabled
+      ? "ON"
+      : "OFF";
 
   const activeBoostConfig = activeBoost
     ? POWER_PLAY_CONFIG.TYPES[activeBoost.type] || null
     : null;
   const appliedComboMultiplier = activeBoost ? comboMultiplier : 1;
   const speedMultiplier = (activeBoostConfig?.speedMultiplier || 1) * appliedComboMultiplier;
-  const shotPowerMultiplier = (activeBoostConfig?.shotPowerMultiplier || 1) * appliedComboMultiplier;
+  const boostShotPowerMultiplier =
+    (activeBoostConfig?.shotPowerMultiplier || 1) * appliedComboMultiplier;
+  const shotPowerMultiplier = boostShotPowerMultiplier * activeKickMultiplierFromStamina;
   const controlAssistMultiplier =
     (activeBoostConfig?.controlAssistMultiplier || 1) * appliedComboMultiplier;
   const canvasDpr = qualityMode === "mobile" ? [1, 1.2] : [1, 1.5];
@@ -525,10 +617,12 @@ function App() {
     playerInputRef.current.ArrowRight = false;
   }, []);
 
-  const resetPlayer = useCallback(() => {
+  const resetPlayers = useCallback(() => {
     clearPlayerInput();
-    setPlayerPosition([...PLAYER_START_POSITION]);
-    setPlayerRotation([...PLAYER_START_ROTATION]);
+    setIsSprintHeld(false);
+    setActivePlayerId(PLAYER_IDS[0]);
+    setPlayerStates(createInitialPlayerStates());
+    lastPlayerSwitchAtRef.current = 0;
   }, [clearPlayerInput]);
 
   const spawnPowerZone = useCallback(() => {
@@ -576,7 +670,7 @@ function App() {
     setOverlayPulseType(null);
     setCameraNudge([0, 0, 0]);
     halftimeTriggeredRef.current = false;
-    resetPlayer();
+    resetPlayers();
 
     setTimeout(() => {
       safeResetBall();
@@ -594,7 +688,7 @@ function App() {
       setGameState(GAME_STATES.IN_PLAY);
       kickoffRef.current?.();
     }, INTRO_CONFIG.DURATION_MS);
-  }, [clearComboState, clearIntroTimers, clearPowerPlayTimers, resetPlayer, safeResetBall]);
+  }, [clearComboState, clearIntroTimers, clearPowerPlayTimers, resetPlayers, safeResetBall]);
 
   const skipIntro = useCallback(() => {
     if (gameState !== GAME_STATES.INTRO) {
@@ -640,43 +734,102 @@ function App() {
         directionZ += 1;
       }
 
-      if (directionX === 0 && directionZ === 0) {
-        return;
-      }
+      const isMoving = directionX !== 0 || directionZ !== 0;
 
-      const directionMagnitude = Math.hypot(directionX, directionZ);
-      const normalizedX = directionX / directionMagnitude;
-      const normalizedZ = directionZ / directionMagnitude;
-      const nextYaw = Math.atan2(normalizedX, normalizedZ);
-
-      setPlayerRotation((currentRotation) => {
-        if (Math.abs(currentRotation[1] - nextYaw) < 0.0001) {
-          return currentRotation;
+      setPlayerStates((currentStates) => {
+        const currentPlayerState = currentStates[activePlayerId];
+        if (!currentPlayerState) {
+          return currentStates;
         }
 
-        return [0, nextYaw, 0];
-      });
-
-      setPlayerPosition((currentPosition) => {
-        const nextX = clamp(
-          currentPosition[0] + normalizedX * PLAYER_CONTROL_SPEED * deltaSeconds,
-          -playerBounds.x,
-          playerBounds.x
-        );
-        const nextZ = clamp(
-          currentPosition[2] + normalizedZ * PLAYER_CONTROL_SPEED * deltaSeconds,
-          -playerBounds.z,
-          playerBounds.z
+        const profile = getPlayerProfile(activePlayerId);
+        const currentPosition = currentPlayerState.position;
+        const currentRotation = currentPlayerState.rotation;
+        const currentStamina = currentPlayerState.stamina;
+        const currentStaminaRatio = getStaminaRatio(activePlayerId, currentStamina);
+        const isSprinting = isMoving && isSprintHeld && !currentPlayerState.sprintLocked;
+        const movementSpeed = computeMovementSpeed(
+          profile,
+          currentStaminaRatio,
+          isSprinting,
+          currentPlayerState.sprintLocked
         );
 
-        if (nextX === currentPosition[0] && nextZ === currentPosition[2]) {
-          return currentPosition;
+        let nextPosition = currentPosition;
+        let nextRotation = currentRotation;
+
+        if (isMoving) {
+          const directionMagnitude = Math.hypot(directionX, directionZ);
+          const normalizedX = directionX / directionMagnitude;
+          const normalizedZ = directionZ / directionMagnitude;
+          const nextYaw = Math.atan2(normalizedX, normalizedZ);
+
+          const nextX = clamp(
+            currentPosition[0] + normalizedX * movementSpeed * deltaSeconds,
+            -playerBounds.x,
+            playerBounds.x
+          );
+          const nextZ = clamp(
+            currentPosition[2] + normalizedZ * movementSpeed * deltaSeconds,
+            -playerBounds.z,
+            playerBounds.z
+          );
+
+          if (nextX !== currentPosition[0] || nextZ !== currentPosition[2]) {
+            nextPosition = [nextX, profile.startPosition[1], nextZ];
+          }
+
+          if (Math.abs(currentRotation[1] - nextYaw) >= 0.0001) {
+            nextRotation = [0, nextYaw, 0];
+          }
         }
 
-        return [nextX, PLAYER_START_POSITION[1], nextZ];
+        let nextStamina = currentStamina;
+        if (isSprinting) {
+          nextStamina = clampStamina(
+            activePlayerId,
+            currentStamina - profile.staminaDrainPerSecSprint * deltaSeconds
+          );
+        } else {
+          nextStamina = clampStamina(
+            activePlayerId,
+            currentStamina + profile.staminaRegenPerSec * deltaSeconds
+          );
+        }
+
+        let nextSprintLocked = currentPlayerState.sprintLocked;
+        const nextStaminaRatio = getStaminaRatio(activePlayerId, nextStamina);
+        if (nextStamina <= 0.0001) {
+          nextSprintLocked = true;
+        } else if (
+          nextSprintLocked &&
+          nextStaminaRatio >= PLAYER_STAMINA_CONFIG.SPRINT_REENABLE_RATIO
+        ) {
+          nextSprintLocked = false;
+        }
+
+        const staminaChanged = Math.abs(nextStamina - currentStamina) > 0.0001;
+        const positionChanged = nextPosition !== currentPosition;
+        const rotationChanged = nextRotation !== currentRotation;
+        const sprintLockChanged = nextSprintLocked !== currentPlayerState.sprintLocked;
+
+        if (!staminaChanged && !positionChanged && !rotationChanged && !sprintLockChanged) {
+          return currentStates;
+        }
+
+        return {
+          ...currentStates,
+          [activePlayerId]: {
+            ...currentPlayerState,
+            position: nextPosition,
+            rotation: nextRotation,
+            stamina: nextStamina,
+            sprintLocked: nextSprintLocked,
+          },
+        };
       });
     },
-    [playerBounds.x, playerBounds.z]
+    [activePlayerId, isSprintHeld, playerBounds.x, playerBounds.z]
   );
 
   const handleGoal = useCallback(
@@ -978,7 +1131,40 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (event) => {
+      if (event.key === PLAYER_SWITCH_CONFIG.KEY) {
+        if (controlTarget !== CONTROL_TARGETS.PLAYER || !matchStarted) {
+          return;
+        }
+
+        const now = nowMs();
+        if (
+          lastPlayerSwitchAtRef.current > 0 &&
+          now - lastPlayerSwitchAtRef.current < PLAYER_SWITCH_CONFIG.COOLDOWN_MS
+        ) {
+          event.preventDefault();
+          return;
+        }
+
+        event.preventDefault();
+        lastPlayerSwitchAtRef.current = now;
+        clearPlayerInput();
+        setIsSprintHeld(false);
+        setShotMeterState(createShotMeterState());
+        setActivePlayerId((currentPlayerId) => {
+          const currentIndex = PLAYER_IDS.indexOf(currentPlayerId);
+          const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % PLAYER_IDS.length;
+          return PLAYER_IDS[nextIndex];
+        });
+        return;
+      }
+
       if (!playerControlsEnabled) {
+        return;
+      }
+
+      if (event.key === "Shift") {
+        event.preventDefault();
+        setIsSprintHeld(true);
         return;
       }
 
@@ -991,6 +1177,11 @@ function App() {
     };
 
     const handleKeyUp = (event) => {
+      if (event.key === "Shift") {
+        setIsSprintHeld(false);
+        return;
+      }
+
       if (!(event.key in playerInputRef.current)) {
         return;
       }
@@ -998,18 +1189,26 @@ function App() {
       playerInputRef.current[event.key] = false;
     };
 
+    const handleWindowBlur = () => {
+      clearPlayerInput();
+      setIsSprintHeld(false);
+    };
+
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleWindowBlur);
 
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleWindowBlur);
     };
-  }, [playerControlsEnabled]);
+  }, [clearPlayerInput, controlTarget, matchStarted, playerControlsEnabled]);
 
   useEffect(() => {
     if (!playerControlsEnabled) {
       clearPlayerInput();
+      setIsSprintHeld(false);
       setShotMeterState(createShotMeterState());
       return undefined;
     }
@@ -1106,6 +1305,13 @@ function App() {
           <span>{TEAM_TWO.name}</span>
         </p>
 
+        <p className="active-player-chip" data-testid="active-player-label">
+          <span>Active Player:</span>
+          <strong>{activeProfile.label}</strong>
+          <span>{activePlayerStrength}</span>
+          <span className="active-player-speed">{activeMovementSpeed.toFixed(1)} SPD</span>
+        </p>
+
         <p className={`boost-label ${activeBoost ? "is-active" : ""}`}>
           Boost:{" "}
           {activeBoost
@@ -1158,6 +1364,20 @@ function App() {
                   : "Hold Space, release to shoot"
                 : "Shot meter activates during live player control"}
             </small>
+          </div>
+        )}
+
+        {showShotMeter && (
+          <div className={`stamina-meter ${staminaToneClass}`} data-testid="stamina-meter">
+            <span className="stamina-meter-row">
+              <span>
+                Stamina: <strong data-testid="stamina-value">{activeStaminaPercent}%</strong>
+              </span>
+              <span data-testid="sprint-state">Sprint: {sprintStatusLabel}</span>
+            </span>
+            <div className="stamina-meter-track" aria-hidden="true">
+              <span className="stamina-meter-fill" style={{ width: `${activeStaminaPercent}%` }} />
+            </div>
           </div>
         )}
 
@@ -1233,7 +1453,7 @@ function App() {
 
         <p className="help-text">
           {controlTarget === CONTROL_TARGETS.PLAYER
-            ? "Controls: Arrow keys move the player. Touch the ball to dribble, hold Space to charge, release to kick."
+            ? `Controls: Arrow keys move the active player. Hold Shift to sprint. Press ${PLAYER_SWITCH_CONFIG.KEY} to switch players. Touch the ball to dribble, hold Space to charge, release to kick.`
             : "Controls: Arrow keys move the ball and Space pops it upward. Switch to Player mode to run the player."}{" "}
           Capture power-play zones quickly to build combo multipliers.
         </p>
@@ -1270,7 +1490,24 @@ function App() {
         <Suspense fallback={<LoadingFallback />}>
           <Physics gravity={[0, -9.81, 0]} iterations={12} tolerance={0.0001}>
             <SoccerField activePowerZone={activePowerZone} />
-            <SoccerPlayer position={playerPosition} rotation={playerRotation} />
+            {PLAYER_IDS.map((playerId, index) => {
+              const profile = getPlayerProfile(playerId);
+              const playerState = playerStates[playerId] || {
+                position: [...profile.startPosition],
+                rotation: [...profile.startRotation],
+              };
+
+              return (
+                <SoccerPlayer
+                  key={playerId}
+                  playerId={playerId}
+                  position={playerState.position}
+                  rotation={playerState.rotation}
+                  isActive={playerId === activePlayerId}
+                  kitVariant={index === 0 ? "primary" : "secondary"}
+                />
+              );
+            })}
 
             {matchStarted && (
               <SoccerBallModel
@@ -1279,8 +1516,8 @@ function App() {
                 resetRef={ballResetRef}
                 kickoffRef={kickoffRef}
                 controlsEnabled={ballControlsEnabled}
-                playerPosition={playerPosition}
-                playerRotation={playerRotation}
+                playerPosition={activePlayerState.position}
+                playerRotation={activePlayerState.rotation}
                 playerControlsEnabled={playerControlsEnabled}
                 onOutOfBounds={handleOutOfBounds}
                 activePowerZone={activePowerZone}

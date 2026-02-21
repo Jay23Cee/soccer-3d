@@ -114,3 +114,42 @@ export const POWER_PLAY_CONFIG = {
     [0, 24],
   ],
 };
+
+export const PLAYER_IDS = ["player_one", "player_two"];
+
+export const PLAYER_SWITCH_CONFIG = {
+  KEY: "Tab",
+  COOLDOWN_MS: 180,
+};
+
+export const PLAYER_STAMINA_CONFIG = {
+  LOW_THRESHOLD_RATIO: 0.2,
+  SPRINT_REENABLE_RATIO: 0.1,
+  LOW_SPEED_MULTIPLIER: 0.85,
+  LOW_KICK_MULTIPLIER: 0.9,
+};
+
+export const PLAYER_PROFILES = {
+  player_one: {
+    label: "Player One",
+    baseRunSpeed: 34,
+    sprintMultiplier: 1.2,
+    kickPowerMultiplier: 1.25,
+    staminaMax: 100,
+    staminaDrainPerSecSprint: 24,
+    staminaRegenPerSec: 12,
+    startPosition: [-6, 0, 22],
+    startRotation: [0, Math.PI, 0],
+  },
+  player_two: {
+    label: "Player Two",
+    baseRunSpeed: 30,
+    sprintMultiplier: 1.08,
+    kickPowerMultiplier: 1,
+    staminaMax: 100,
+    staminaDrainPerSecSprint: 16,
+    staminaRegenPerSec: 20,
+    startPosition: [6, 0, 22],
+    startRotation: [0, Math.PI, 0],
+  },
+};

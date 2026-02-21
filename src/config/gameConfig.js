@@ -1,5 +1,6 @@
 export const GAME_STATES = {
   IDLE: "idle",
+  INTRO: "intro",
   IN_PLAY: "in_play",
   GOAL_SCORED: "goal_scored",
   PAUSED: "paused",
@@ -13,13 +14,13 @@ export const BALL_RESET_DELAY_MS = 550;
 export const BALL_BODY_NAME = "ball";
 
 export const FIELD_CONFIG = {
-  WIDTH: 100,
+  WIDTH: 112,
   LENGTH: 160,
   MARKING_OFFSET_Y: 0.05,
   BOUNDARY: {
     HEIGHT: 5,
     THICKNESS: 1,
-    X_LIMIT: 52,
+    X_LIMIT: 58,
     Z_LIMIT: 82,
   },
 };
@@ -44,4 +45,52 @@ export const BALL_CONFIG = {
 export const GOAL_CONFIG = {
   SCALE: 2,
   TRIGGER_DEBOUNCE_MS: 600,
+};
+
+export const INTRO_CONFIG = {
+  DURATION_MS: 4200,
+  CAMERA_START: [150, 60, 170],
+  CAMERA_END: [92, 72, 118],
+  CAMERA_START_FOV: 44,
+  CAMERA_END_FOV: 52,
+};
+
+export const POWER_PLAY_CONFIG = {
+  ZONE_RADIUS: 7,
+  SPAWN_DELAY_MS: 12000,
+  ZONE_DURATION_MS: 9000,
+  BOOST_DURATION_MS: 7000,
+  TYPES: {
+    speed: {
+      label: "Speed",
+      color: "#1dd75f",
+      speedMultiplier: 1.8,
+      shotPowerMultiplier: 1,
+      controlAssistMultiplier: 1,
+    },
+    shot_power: {
+      label: "Shot Power",
+      color: "#f97316",
+      speedMultiplier: 1.1,
+      shotPowerMultiplier: 1.9,
+      controlAssistMultiplier: 1,
+    },
+    passing_accuracy: {
+      label: "Passing Accuracy",
+      color: "#06b6d4",
+      speedMultiplier: 1.2,
+      shotPowerMultiplier: 1.1,
+      controlAssistMultiplier: 1.9,
+    },
+  },
+  POSITIONS: [
+    [-28, -44],
+    [28, -44],
+    [-30, 0],
+    [30, 0],
+    [-28, 44],
+    [28, 44],
+    [0, -24],
+    [0, 24],
+  ],
 };

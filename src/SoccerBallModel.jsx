@@ -5,7 +5,18 @@ import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { BALL_BODY_NAME, BALL_CONFIG } from "./config/gameConfig";
 
-function SoccerBallModel({ scale, resetRef, controlsEnabled, onOutOfBounds }) {
+function SoccerBallModel({
+  scale,
+  resetRef,
+  kickoffRef,
+  controlsEnabled,
+  onOutOfBounds,
+  activePowerZone,
+  onPowerZoneEnter,
+  speedMultiplier = 1,
+  shotPowerMultiplier = 1,
+  controlAssistMultiplier = 1,
+}) {
   const { scene } = useGLTF("/ball/scene.gltf");
   const ballScene = useMemo(() => scene.clone(), [scene]);
   const [ref, api] = useSphere(() => ({
@@ -24,6 +35,7 @@ function SoccerBallModel({ scale, resetRef, controlsEnabled, onOutOfBounds }) {
   const directionRef = useRef([0, 0, 0]);
   const outOfBoundsLockRef = useRef(false);
   const outOfBoundsTimerRef = useRef(null);
+  const triggeredZoneIdRef = useRef(null);
 
   useEffect(() => {
     ballScene.traverse((child) => {
@@ -44,10 +56,16 @@ function SoccerBallModel({ scale, resetRef, controlsEnabled, onOutOfBounds }) {
   const resetBall = useCallback(() => {
     directionRef.current = [0, 0, 0];
     outOfBoundsLockRef.current = false;
+    triggeredZoneIdRef.current = null;
     api.position.set(...BALL_CONFIG.SPAWN_POSITION);
     api.velocity.set(0, 0, 0);
     api.angularVelocity.set(0, 0, 0);
   }, [api]);
+
+  const kickoffBall = useCallback(() => {
+    const directionSign = Math.random() > 0.5 ? 1 : -1;
+    api.applyImpulse([0, 2.2 * shotPowerMultiplier, directionSign * 8], [0, 0, 0]);
+  }, [api, shotPowerMultiplier]);
 
   useEffect(() => {
     if (resetRef) {
@@ -62,31 +80,57 @@ function SoccerBallModel({ scale, resetRef, controlsEnabled, onOutOfBounds }) {
   }, [resetRef, resetBall]);
 
   useEffect(() => {
+    if (kickoffRef) {
+      kickoffRef.current = kickoffBall;
+    }
+
+    return () => {
+      if (kickoffRef?.current === kickoffBall) {
+        kickoffRef.current = null;
+      }
+    };
+  }, [kickoffRef, kickoffBall]);
+
+  useEffect(() => {
+    if (!activePowerZone) {
+      triggeredZoneIdRef.current = null;
+    }
+  }, [activePowerZone]);
+
+  useEffect(() => {
+    if (!controlsEnabled) {
+      directionRef.current = [0, 0, 0];
+    }
+  }, [controlsEnabled]);
+
+  useEffect(() => {
     const handleKeyDown = (event) => {
       if (!controlsEnabled) {
         return;
       }
 
+      const directionalForce = BALL_CONFIG.FORCE * speedMultiplier;
+
       switch (event.key) {
         case "ArrowUp":
           event.preventDefault();
-          directionRef.current = [0, 0, -BALL_CONFIG.FORCE];
+          directionRef.current = [0, 0, -directionalForce];
           break;
         case "ArrowDown":
           event.preventDefault();
-          directionRef.current = [0, 0, BALL_CONFIG.FORCE];
+          directionRef.current = [0, 0, directionalForce];
           break;
         case "ArrowLeft":
           event.preventDefault();
-          directionRef.current = [-BALL_CONFIG.FORCE, 0, 0];
+          directionRef.current = [-directionalForce, 0, 0];
           break;
         case "ArrowRight":
           event.preventDefault();
-          directionRef.current = [BALL_CONFIG.FORCE, 0, 0];
+          directionRef.current = [directionalForce, 0, 0];
           break;
         case " ":
           event.preventDefault();
-          api.applyImpulse([0, BALL_CONFIG.JUMP_IMPULSE, 0], [0, 0, 0]);
+          api.applyImpulse([0, BALL_CONFIG.JUMP_IMPULSE * shotPowerMultiplier, 0], [0, 0, 0]);
           break;
         default:
           break;
@@ -106,7 +150,7 @@ function SoccerBallModel({ scale, resetRef, controlsEnabled, onOutOfBounds }) {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [api, controlsEnabled]);
+  }, [api, controlsEnabled, shotPowerMultiplier, speedMultiplier]);
 
   useEffect(() => {
     const unsubscribeVelocity = api.velocity.subscribe((velocity) => {
@@ -134,6 +178,21 @@ function SoccerBallModel({ scale, resetRef, controlsEnabled, onOutOfBounds }) {
           outOfBoundsLockRef.current = false;
         }, 400);
       }
+
+      if (!activePowerZone || !onPowerZoneEnter) {
+        return;
+      }
+
+      const [zoneX, zoneZ] = activePowerZone.position;
+      const zoneRadius = activePowerZone.radius;
+      const dx = x - zoneX;
+      const dz = z - zoneZ;
+      const isInsideZone = dx * dx + dz * dz <= zoneRadius * zoneRadius && y < 5;
+
+      if (isInsideZone && triggeredZoneIdRef.current !== activePowerZone.id) {
+        triggeredZoneIdRef.current = activePowerZone.id;
+        onPowerZoneEnter(activePowerZone);
+      }
     });
 
     return () => {
@@ -143,13 +202,15 @@ function SoccerBallModel({ scale, resetRef, controlsEnabled, onOutOfBounds }) {
         clearTimeout(outOfBoundsTimerRef.current);
       }
     };
-  }, [api, onOutOfBounds]);
+  }, [activePowerZone, api, onOutOfBounds, onPowerZoneEnter]);
 
   useFrame(() => {
     const [vx, vy, vz] = velocityRef.current;
     const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
-    if (speed > BALL_CONFIG.MAX_SPEED) {
-      const scaleVelocity = BALL_CONFIG.MAX_SPEED / speed;
+    const boostedMaxSpeed = BALL_CONFIG.MAX_SPEED * (speedMultiplier > 1 ? 1.35 : 1);
+
+    if (speed > boostedMaxSpeed) {
+      const scaleVelocity = boostedMaxSpeed / speed;
       api.velocity.set(vx * scaleVelocity, vy * scaleVelocity, vz * scaleVelocity);
     }
 
@@ -158,6 +219,25 @@ function SoccerBallModel({ scale, resetRef, controlsEnabled, onOutOfBounds }) {
       (directionRef.current[0] !== 0 || directionRef.current[2] !== 0)
     ) {
       api.applyForce(directionRef.current, [0, 0, 0]);
+
+      if (controlAssistMultiplier > 1) {
+        const directionalMagnitude = Math.hypot(
+          directionRef.current[0],
+          directionRef.current[2]
+        );
+
+        if (directionalMagnitude > 0.001) {
+          const dirX = directionRef.current[0] / directionalMagnitude;
+          const dirZ = directionRef.current[2] / directionalMagnitude;
+          const perpX = -dirZ;
+          const perpZ = dirX;
+          const lateralVelocity = vx * perpX + vz * perpZ;
+          const correctionMagnitude =
+            -lateralVelocity * BALL_CONFIG.FORCE * 0.38 * controlAssistMultiplier;
+
+          api.applyForce([perpX * correctionMagnitude, 0, perpZ * correctionMagnitude], [0, 0, 0]);
+        }
+      }
     }
   });
 

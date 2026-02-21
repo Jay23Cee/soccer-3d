@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useMemo, useRef } from "react";
 import { useBox, usePlane } from "@react-three/cannon";
 import { useTexture } from "@react-three/drei";
+import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { FIELD_CONFIG } from "./config/gameConfig";
 
@@ -10,6 +11,18 @@ const GRASS_TEXTURES = [
   "/Grass001_2K-JPG/Grass001_2K-JPG_NormalGL.jpg",
   "/Grass001_2K-JPG/Grass001_2K-JPG_Displacement.jpg",
 ];
+
+const TRACK_CONFIG = {
+  WIDTH: 12, // wider track while keeping about five lanes
+  COLOR: "#8a634f",
+  LANE_COUNT: 5,
+  LANE_COLOR: "#c9b2a3",
+};
+
+const FIELD_BORDER_CONFIG = {
+  COLOR: "#efe8dd",
+  OPACITY: 0.82,
+};
 
 function BoundaryWall({ position, args }) {
   useBox(() => ({
@@ -21,10 +34,41 @@ function BoundaryWall({ position, args }) {
   return null;
 }
 
-function SoccerField() {
+function SoccerField({ activePowerZone }) {
   const [grassColor, grassRoughness, grassNormal, grassDisplacement] =
     useTexture(GRASS_TEXTURES);
   const { WIDTH, LENGTH, MARKING_OFFSET_Y, BOUNDARY } = FIELD_CONFIG;
+  const powerZoneRef = useRef(null);
+  const powerZoneMaterialRef = useRef(null);
+  const trackOuterHalfWidth = WIDTH / 2 + TRACK_CONFIG.WIDTH;
+  const trackOuterHalfLength = LENGTH / 2 + TRACK_CONFIG.WIDTH;
+  const boundaryXLimit = trackOuterHalfWidth + 2;
+  const boundaryZLimit = trackOuterHalfLength + 2;
+  const laneStep = TRACK_CONFIG.WIDTH / TRACK_CONFIG.LANE_COUNT;
+  const laneOffsets = Array.from(
+    { length: TRACK_CONFIG.LANE_COUNT - 1 },
+    (_, index) => (index + 1) * laneStep
+  );
+  const trackShape = useMemo(() => {
+    const shape = new THREE.Shape();
+    shape.moveTo(-trackOuterHalfWidth, -trackOuterHalfLength);
+    shape.lineTo(trackOuterHalfWidth, -trackOuterHalfLength);
+    shape.lineTo(trackOuterHalfWidth, trackOuterHalfLength);
+    shape.lineTo(-trackOuterHalfWidth, trackOuterHalfLength);
+    shape.lineTo(-trackOuterHalfWidth, -trackOuterHalfLength);
+
+    const fieldHole = new THREE.Path();
+    fieldHole.moveTo(-WIDTH / 2, -LENGTH / 2);
+    fieldHole.lineTo(-WIDTH / 2, LENGTH / 2);
+    fieldHole.lineTo(WIDTH / 2, LENGTH / 2);
+    fieldHole.lineTo(WIDTH / 2, -LENGTH / 2);
+    fieldHole.lineTo(-WIDTH / 2, -LENGTH / 2);
+    shape.holes.push(fieldHole);
+
+    return shape;
+  }, [LENGTH, WIDTH, trackOuterHalfLength, trackOuterHalfWidth]);
+
+  grassColor.colorSpace = THREE.SRGBColorSpace;
 
   [grassColor, grassRoughness, grassNormal, grassDisplacement].forEach((map) => {
     map.wrapS = THREE.RepeatWrapping;
@@ -38,8 +82,23 @@ function SoccerField() {
     rotation: [-Math.PI / 2, 0, 0],
   }));
 
+  useFrame(({ clock }) => {
+    if (!activePowerZone || !powerZoneRef.current || !powerZoneMaterialRef.current) {
+      return;
+    }
+
+    const pulse = 1 + Math.sin(clock.elapsedTime * 5.5) * 0.1;
+    powerZoneRef.current.scale.set(pulse, pulse, pulse);
+    powerZoneMaterialRef.current.emissiveIntensity = 0.95 + Math.sin(clock.elapsedTime * 8) * 0.45;
+  });
+
   return (
     <>
+      <mesh position={[0, -0.02, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+        <shapeGeometry args={[trackShape]} />
+        <meshStandardMaterial color={TRACK_CONFIG.COLOR} roughness={0.94} metalness={0.08} />
+      </mesh>
+
       <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
         <planeGeometry args={[WIDTH, LENGTH, 64, 64]} />
         <meshStandardMaterial
@@ -53,6 +112,26 @@ function SoccerField() {
       </mesh>
 
       <group>
+        <lineSegments position={[0, MARKING_OFFSET_Y + 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <edgesGeometry args={[new THREE.PlaneGeometry(WIDTH, LENGTH)]} />
+          <lineBasicMaterial
+            color={FIELD_BORDER_CONFIG.COLOR}
+            transparent
+            opacity={FIELD_BORDER_CONFIG.OPACITY}
+          />
+        </lineSegments>
+
+        {laneOffsets.map((offset, index) => (
+          <lineSegments
+            key={`track-lane-${index}`}
+            position={[0, MARKING_OFFSET_Y - 0.015, 0]}
+            rotation={[-Math.PI / 2, 0, 0]}
+          >
+            <edgesGeometry args={[new THREE.PlaneGeometry(WIDTH + offset * 2, LENGTH + offset * 2)]} />
+            <lineBasicMaterial color={TRACK_CONFIG.LANE_COLOR} transparent opacity={0.46} />
+          </lineSegments>
+        ))}
+
         <mesh position={[0, MARKING_OFFSET_Y, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <ringGeometry args={[9.5, 10, 64]} />
           <meshBasicMaterial color="#ffffff" side={THREE.DoubleSide} />
@@ -105,21 +184,49 @@ function SoccerField() {
         )}
       </group>
 
+      {activePowerZone && (
+        <group
+          ref={powerZoneRef}
+          position={[
+            activePowerZone.position[0],
+            MARKING_OFFSET_Y + 0.05,
+            activePowerZone.position[1],
+          ]}
+        >
+          <mesh rotation={[-Math.PI / 2, 0, 0]}>
+            <ringGeometry args={[activePowerZone.radius * 0.58, activePowerZone.radius, 60]} />
+            <meshStandardMaterial
+              ref={powerZoneMaterialRef}
+              color={activePowerZone.color}
+              emissive={activePowerZone.color}
+              emissiveIntensity={1}
+              transparent
+              opacity={0.72}
+              side={THREE.DoubleSide}
+            />
+          </mesh>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.06, 0]}>
+            <circleGeometry args={[activePowerZone.radius * 0.25, 40]} />
+            <meshBasicMaterial color="#ffffff" transparent opacity={0.45} side={THREE.DoubleSide} />
+          </mesh>
+        </group>
+      )}
+
       <BoundaryWall
-        position={[0, BOUNDARY.HEIGHT / 2, BOUNDARY.Z_LIMIT]}
-        args={[WIDTH / 2 + 4, BOUNDARY.HEIGHT / 2, BOUNDARY.THICKNESS / 2]}
+        position={[0, BOUNDARY.HEIGHT / 2, boundaryZLimit]}
+        args={[trackOuterHalfWidth + 4, BOUNDARY.HEIGHT / 2, BOUNDARY.THICKNESS / 2]}
       />
       <BoundaryWall
-        position={[0, BOUNDARY.HEIGHT / 2, -BOUNDARY.Z_LIMIT]}
-        args={[WIDTH / 2 + 4, BOUNDARY.HEIGHT / 2, BOUNDARY.THICKNESS / 2]}
+        position={[0, BOUNDARY.HEIGHT / 2, -boundaryZLimit]}
+        args={[trackOuterHalfWidth + 4, BOUNDARY.HEIGHT / 2, BOUNDARY.THICKNESS / 2]}
       />
       <BoundaryWall
-        position={[BOUNDARY.X_LIMIT, BOUNDARY.HEIGHT / 2, 0]}
-        args={[BOUNDARY.THICKNESS / 2, BOUNDARY.HEIGHT / 2, LENGTH / 2 + 4]}
+        position={[boundaryXLimit, BOUNDARY.HEIGHT / 2, 0]}
+        args={[BOUNDARY.THICKNESS / 2, BOUNDARY.HEIGHT / 2, trackOuterHalfLength + 4]}
       />
       <BoundaryWall
-        position={[-BOUNDARY.X_LIMIT, BOUNDARY.HEIGHT / 2, 0]}
-        args={[BOUNDARY.THICKNESS / 2, BOUNDARY.HEIGHT / 2, LENGTH / 2 + 4]}
+        position={[-boundaryXLimit, BOUNDARY.HEIGHT / 2, 0]}
+        args={[BOUNDARY.THICKNESS / 2, BOUNDARY.HEIGHT / 2, trackOuterHalfLength + 4]}
       />
     </>
   );

@@ -929,6 +929,8 @@ function App() {
                 resetRef={ballResetRef}
                 kickoffRef={kickoffRef}
                 controlsEnabled={ballControlsEnabled}
+                playerPosition={playerPosition}
+                playerRotation={playerRotation}
                 onOutOfBounds={handleOutOfBounds}
                 activePowerZone={activePowerZone}
                 onPowerZoneEnter={handlePowerZoneEnter}

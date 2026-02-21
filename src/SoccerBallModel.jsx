@@ -5,11 +5,32 @@ import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { BALL_BODY_NAME, BALL_CONFIG } from "./config/gameConfig";
 
+const PLAYER_CONTACT_CONFIG = {
+  RADIUS: 1.45,
+  HEIGHT_OFFSET: 1.1,
+  HEIGHT_TOLERANCE: 1.8,
+  MIN_MOVEMENT_SPEED: 1.25,
+  IMPULSE_MIN: 0.45,
+  IMPULSE_MAX: 1.6,
+  IMPULSE_COOLDOWN_MS: 80,
+  LIFT_IMPULSE: 0.04,
+};
+
+function getNowMs() {
+  if (typeof performance !== "undefined") {
+    return performance.now();
+  }
+
+  return Date.now();
+}
+
 function SoccerBallModel({
   scale,
   resetRef,
   kickoffRef,
   controlsEnabled,
+  playerPosition = [0, 0, 0],
+  playerRotation = [0, Math.PI, 0],
   onOutOfBounds,
   activePowerZone,
   onPowerZoneEnter,
@@ -32,7 +53,10 @@ function SoccerBallModel({
   }));
 
   const velocityRef = useRef([0, 0, 0]);
+  const ballPositionRef = useRef([...BALL_CONFIG.SPAWN_POSITION]);
   const directionRef = useRef([0, 0, 0]);
+  const lastPlayerPositionRef = useRef([...playerPosition]);
+  const lastTouchImpulseAtRef = useRef(0);
   const outOfBoundsLockRef = useRef(false);
   const outOfBoundsTimerRef = useRef(null);
   const triggeredZoneIdRef = useRef(null);
@@ -57,6 +81,8 @@ function SoccerBallModel({
     directionRef.current = [0, 0, 0];
     outOfBoundsLockRef.current = false;
     triggeredZoneIdRef.current = null;
+    ballPositionRef.current = [...BALL_CONFIG.SPAWN_POSITION];
+    lastTouchImpulseAtRef.current = 0;
     api.position.set(...BALL_CONFIG.SPAWN_POSITION);
     api.velocity.set(0, 0, 0);
     api.angularVelocity.set(0, 0, 0);
@@ -158,6 +184,8 @@ function SoccerBallModel({
     });
 
     const unsubscribePosition = api.position.subscribe(([x, y, z]) => {
+      ballPositionRef.current = [x, y, z];
+
       if (!onOutOfBounds || outOfBoundsLockRef.current) {
         return;
       }
@@ -204,7 +232,7 @@ function SoccerBallModel({
     };
   }, [activePowerZone, api, onOutOfBounds, onPowerZoneEnter]);
 
-  useFrame(() => {
+  useFrame((_, delta) => {
     const [vx, vy, vz] = velocityRef.current;
     const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
     const boostedMaxSpeed = BALL_CONFIG.MAX_SPEED * (speedMultiplier > 1 ? 1.35 : 1);
@@ -239,6 +267,52 @@ function SoccerBallModel({
         }
       }
     }
+
+    const [ballX, ballY, ballZ] = ballPositionRef.current;
+    const [playerX, playerY, playerZ] = playerPosition;
+    const [previousPlayerX, , previousPlayerZ] = lastPlayerPositionRef.current;
+    const playerTravelDistance = Math.hypot(playerX - previousPlayerX, playerZ - previousPlayerZ);
+    const playerPlanarSpeed = playerTravelDistance / Math.max(delta, 0.0001);
+    lastPlayerPositionRef.current = [playerX, playerY, playerZ];
+
+    if (playerPlanarSpeed < PLAYER_CONTACT_CONFIG.MIN_MOVEMENT_SPEED) {
+      return;
+    }
+
+    const distanceToPlayer = Math.hypot(ballX - playerX, ballZ - playerZ);
+    const touchDistance = PLAYER_CONTACT_CONFIG.RADIUS + scale;
+    const playerBodyHeight = playerY + PLAYER_CONTACT_CONFIG.HEIGHT_OFFSET;
+    const alignedByHeight =
+      Math.abs(ballY - playerBodyHeight) <= PLAYER_CONTACT_CONFIG.HEIGHT_TOLERANCE;
+
+    if (distanceToPlayer > touchDistance || !alignedByHeight) {
+      return;
+    }
+
+    const now = getNowMs();
+    if (now - lastTouchImpulseAtRef.current < PLAYER_CONTACT_CONFIG.IMPULSE_COOLDOWN_MS) {
+      return;
+    }
+
+    const yaw = Number.isFinite(playerRotation?.[1]) ? playerRotation[1] : 0;
+    const facingX = Math.sin(yaw);
+    const facingZ = Math.cos(yaw);
+    const playerSpeedFactor = Math.min(1, playerPlanarSpeed / 16);
+    const impulseMagnitude = THREE.MathUtils.lerp(
+      PLAYER_CONTACT_CONFIG.IMPULSE_MIN,
+      PLAYER_CONTACT_CONFIG.IMPULSE_MAX,
+      playerSpeedFactor
+    );
+
+    api.applyImpulse(
+      [
+        facingX * impulseMagnitude,
+        PLAYER_CONTACT_CONFIG.LIFT_IMPULSE,
+        facingZ * impulseMagnitude,
+      ],
+      [0, 0, 0]
+    );
+    lastTouchImpulseAtRef.current = now;
   });
 
   return (

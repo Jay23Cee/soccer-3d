@@ -1,65 +1,90 @@
 # Soccer 3D
 
-Soccer 3D is a browser-based 3D soccer prototype built with React, React Three Fiber, and Cannon physics.
+## What this project is
+Soccer 3D is a single-page browser prototype for a 3D soccer match built with React, React Three Fiber, and Cannon physics. The current implementation runs fully on the client and simulates Brazil vs Argentina gameplay with player/ball control modes, AI opponents and goalkeepers, timed match states, power-play boosts, replay playback, and broadcast-style HUD telemetry.
 
-## What It Does
+## Architecture overview
+- App boot: `index.html` -> `src/main.jsx` -> `src/App.jsx`
+- Core simulation: `src/SoccerBallModel.jsx`, `src/SoccerField.jsx`, `src/GoalNet.jsx`, `src/SoccerPlayer.jsx`
+- Match orchestration/state machine: `src/App.jsx`, `src/config/gameConfig.js`
+- AI/replay/camera: `src/ai/opponentController.js`, `src/ai/goalkeeperController.js`, `src/replay/ReplayDirector.js`, `src/camera/CameraDirector.jsx`
+- Static runtime assets: `public/ball/*`, `public/goalnet.gltf`, `public/Grass001_2K-JPG/*`
+- Not found in repo: Next.js route structure (`app/`, `pages/`, `pages/api/`), backend/services folder, Prisma/DB layer, auth provider, deployment config files (`Dockerfile`, `docker-compose`, `vercel.json`, `netlify.toml`)
 
-- Renders a textured soccer field with goal models and physics colliders.
-- Runs a single-player PvE loop (user outfield player vs AI opponent + AI goalkeepers).
-- Spawns a controllable soccer ball (arrow keys + space) with shot charge telemetry.
-- Tracks Brazil vs Argentina scoring from goal triggers.
-- Runs a timed match loop with states: idle, in play, goal scored, paused, ended.
-- Adds cinematic camera direction, instant replay state machine, momentum/possession HUD, and event ticker.
-- Supports ball reset, match restart, and out-of-bounds recovery.
+## How it works
+Full architecture diagrams and end-to-end runtime flow are in [`docs/architecture.md`](docs/architecture.md).
 
-## Controls
+## Local setup
+```bash
+npm install
+npm run dev
+```
 
-- `Arrow Up/Down/Left/Right`: Move the active player (or ball in Ball control mode)
-- `A`: Sprint
-- `S`: Pass to teammate
-- `D`: Shoot (or pop the ball upward in Ball control mode)
-- Overlay buttons:
-  - `Start Match`
-  - `Pause/Resume`
-  - `Reset Ball`
-  - `Restart Match`
+Validation and production commands:
+```bash
+npm run test:ci
+npm run lint
+npm run build
+npm run preview
+```
 
-## Tech Stack
+## Env vars
+No environment variables are required.
 
-- `react`
-- `@react-three/fiber`
-- `@react-three/drei`
-- `@react-three/cannon`
-- `three`
-- `vite`
-- `vitest`
+| Variable | Required | Purpose | Evidence |
+|---|---|---|---|
+| None | No | No `process.env`, `import.meta.env`, or `VITE_*` usage found. | `src/`, `vite.config.js` |
 
-## Project Structure
-
-- `src/App.jsx`: Main game loop, state machine, score/timer UI.
-- `src/SoccerBallModel.jsx`: Ball physics, controls, velocity capping, out-of-bounds handling.
-- `src/GoalNet.jsx`: Goal model + frame colliders + ball-only trigger scoring.
-- `src/SoccerField.jsx`: Field mesh, markings, and arena boundary colliders.
-- `src/main.jsx`: Vite entry point for React rendering.
-- `src/config/gameConfig.js`: Gameplay and physics constants.
-- `docs/ASSETS.md`: Asset usage and attribution details.
+## Database
+- Database: Not found in repo
+- Prisma schema (`prisma/schema.prisma`): Not found in repo
+- Migrations: Not applicable
+- Seed scripts: Not applicable
 
 ## Scripts
+From `package.json`:
 
-- `npm start`: Run development server (alias of `npm run dev`).
-- `npm run dev`: Run development server.
-- `npm run build`: Create production build.
-- `npm run preview`: Preview production build locally.
-- `npm test`: Run tests in watch mode with Vitest.
-- `npm run test:ci`: Run tests once for CI.
-- `npm run lint`: Run ESLint on `src`.
+| Script | Command | Purpose |
+|---|---|---|
+| `start` | `vite` | Run the development server (same runtime target as `dev`). |
+| `dev` | `vite` | Run the development server. |
+| `build` | `vite build` | Create a production build in `dist/`. |
+| `preview` | `vite preview` | Serve the built `dist/` output locally. |
+| `test` | `vitest` | Run tests in watch mode. |
+| `test:ci` | `vitest run` | Run tests once for CI/non-watch usage. |
+| `lint` | `eslint "src/**/*.{js,jsx}"` | Lint source files under `src/`. |
 
-## Notes
+## Deployment
+- Deployment config files (`Dockerfile`, `docker-compose`, `vercel.json`, `netlify.toml`) were not found in this repo.
+- The active build pipeline in `package.json` targets Vite, so the canonical deployable artifact is `dist/` (`npm run build`).
+- A `build/` directory also exists in the repository, but current scripts do not produce it.
 
-- Runtime public assets were reduced to only files used by the app.
-- Non-runtime archives/executables were removed from deploy payload.
-- Tests mock R3F/Cannon components so they run in jsdom reliably.
+## Status
+- Detailed status chart: [`docs/status.md`](docs/status.md)
 
-## Asset Attribution
+### Done
+- Single-page app boot and 3D runtime loop are implemented.
+- Match states, scoring, timers, controls, power-play, and replay systems are implemented.
+- AI opponent and goalkeeper controllers are implemented.
+- Automated tests and linting are configured and currently passing.
 
-See `docs/ASSETS.md`.
+### In Progress
+- Architectural modularization is partial: AI/camera/replay are separated, while `src/App.jsx` still centralizes major orchestration.
+- Build artifact strategy is mixed (`dist/` is script-driven; `build/` also exists).
+- Telemetry/events are implemented in-memory for HUD/timeline but not exported to a persistent sink.
+
+### Next
+- Split `src/App.jsx` into focused modules (state machine, input, HUD orchestration).
+- Standardize and document one build artifact path for deployment.
+- Add structured runtime telemetry hooks for replay and match events.
+
+### Later
+- Formalize deployment target and add minimal deployment config/runbook.
+- Introduce an env/config boundary for tunable gameplay/runtime values.
+
+## Roadmap
+1. Break `src/App.jsx` into feature modules for maintainability.
+2. Standardize `dist/` vs `build/` output strategy and document one canonical artifact.
+3. Add architecture-driven runtime telemetry hooks for match events/replay diagnostics.
+4. Formalize deployment target and add corresponding minimal config/runbook.
+5. Introduce env/config boundary for tunables currently hardcoded in `src/config/gameConfig.js`.

@@ -1,12 +1,33 @@
 import { REPLAY_CONFIG } from "../config/gameConfig";
 
+function cloneVector(vector, fallback = [0, 0, 0]) {
+  if (!Array.isArray(vector)) {
+    return [...fallback];
+  }
+
+  return [...vector];
+}
+
+function cloneEntity(entity) {
+  if (!entity) {
+    return null;
+  }
+
+  return {
+    ...entity,
+    position: cloneVector(entity.position),
+    rotation: cloneVector(entity.rotation),
+    velocity: cloneVector(entity.velocity),
+  };
+}
+
 function cloneFrame(frame) {
   return {
     timestampMs: frame.timestampMs,
-    ball: frame.ball ? { ...frame.ball } : null,
-    players: frame.players ? frame.players.map((player) => ({ ...player })) : [],
-    keepers: frame.keepers ? frame.keepers.map((keeper) => ({ ...keeper })) : [],
-    cameraTarget: frame.cameraTarget ? [...frame.cameraTarget] : [0, 0, 0],
+    ball: cloneEntity(frame.ball),
+    players: frame.players ? frame.players.map((player) => cloneEntity(player)) : [],
+    keepers: frame.keepers ? frame.keepers.map((keeper) => cloneEntity(keeper)) : [],
+    cameraTarget: cloneVector(frame.cameraTarget),
   };
 }
 

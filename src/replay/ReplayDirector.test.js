@@ -62,4 +62,53 @@ describe("ReplayDirector", () => {
     director.update(1200);
     expect(director.getPublicState().mode).toBe("idle");
   });
+
+  test("clones nested vectors so source mutation does not alter replay frames", () => {
+    const director = createReplayDirector({
+      PRE_EVENT_FRAMES: 1,
+      POST_EVENT_FRAMES: 1,
+      MAX_BUFFER_FRAMES: 16,
+      FRAME_INTERVAL_MS: 34,
+      COOLDOWN_MS: 100,
+    });
+
+    const sharedBallPosition = [0, 1, 0];
+    const sharedBallVelocity = [0, 0, -2];
+    const sharedPlayerPosition = [1, 0, -1];
+
+    director.pushFrame({
+      timestampMs: 0,
+      ball: {
+        position: sharedBallPosition,
+        velocity: sharedBallVelocity,
+      },
+      players: [{ playerId: "player_one", position: sharedPlayerPosition, rotation: [0, 0, 0] }],
+      keepers: [],
+      cameraTarget: [0, 0, 0],
+    });
+
+    director.armReplay({ type: "goal", id: "evt-clone" }, 34);
+    director.pushFrame({
+      timestampMs: 34,
+      ball: {
+        position: [0.2, 1, -0.5],
+        velocity: [0, 0, -3],
+      },
+      players: [{ playerId: "player_one", position: [1.1, 0, -1.2], rotation: [0, 0.2, 0] }],
+      keepers: [],
+      cameraTarget: [0.1, 0, -0.1],
+    });
+
+    director.update(68);
+
+    // Mutate original shared vectors after capture.
+    sharedBallPosition[2] = 999;
+    sharedBallVelocity[0] = 999;
+    sharedPlayerPosition[0] = 999;
+
+    const firstFrame = director.getCurrentFrame();
+    expect(firstFrame.ball.position[2]).not.toBe(999);
+    expect(firstFrame.ball.velocity[0]).not.toBe(999);
+    expect(firstFrame.players[0].position[0]).not.toBe(999);
+  });
 });

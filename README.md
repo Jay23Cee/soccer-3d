@@ -24,8 +24,10 @@ Validation and production commands:
 ```bash
 npm run test:ci
 npm run lint
+npm run typecheck
 npm run build
 npm run preview
+npm run e2e -- --list
 ```
 
 ## Env vars
@@ -52,7 +54,10 @@ From `package.json`:
 | `preview` | `vite preview` | Serve the built `dist/` output locally. |
 | `test` | `vitest` | Run tests in watch mode. |
 | `test:ci` | `vitest run` | Run tests once for CI/non-watch usage. |
+| `typecheck` | `tsc --noEmit` | Run baseline JS type checks (`allowJs` + `checkJs`) for non-blocking static validation. |
 | `lint` | `eslint "src/**/*.{js,jsx}"` | Lint source files under `src/`. |
+| `e2e` | `playwright test` | Run browser end-to-end specs from `e2e/`. |
+| `e2e:headed` | `playwright test --headed` | Run end-to-end specs with visible browser for debugging. |
 
 ## Deployment
 - Deployment config files (`Dockerfile`, `docker-compose`, `vercel.json`, `netlify.toml`) were not found in this repo.

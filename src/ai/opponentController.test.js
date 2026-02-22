@@ -12,6 +12,7 @@ describe("opponentController", () => {
       nowMs: 1000,
       deltaSeconds: 0.12,
       difficulty: "normal",
+      targetGoal: [0, 0, 78],
       ballSnapshot: {
         position: [4, 0, -8],
         velocity: [0, 0, 0],
@@ -35,17 +36,18 @@ describe("opponentController", () => {
       nowMs: 1800,
       deltaSeconds: 0.12,
       difficulty: "normal",
+      targetGoal: [0, 0, 78],
       ballSnapshot: {
-        position: [0.5, 0, -56],
-        velocity: [0, 0, -6],
+        position: [0.5, 0, 56],
+        velocity: [0, 0, 6],
       },
       playerState: {
-        position: [2, 0, -40],
+        position: [2, 0, 40],
       },
       opponentState: {
         ...createInitialOpponentState(),
         mode: OPPONENT_STATES.INTERCEPT,
-        position: [0.8, 0, -58],
+        position: [0.8, 0, 58],
         rotation: [0, 0, 0],
         shootCooldownUntilMs: 0,
       },
@@ -53,6 +55,7 @@ describe("opponentController", () => {
 
     expect(result.shootRequested).toBe(true);
     expect(result.shotVector).toBeTruthy();
+    expect(result.shotVector[2]).toBeGreaterThan(0);
     expect(result.mode).toBe(OPPONENT_STATES.RECOVER);
   });
 
@@ -67,6 +70,7 @@ describe("opponentController", () => {
       nowMs: 2400,
       deltaSeconds: 0.12,
       difficulty: "normal",
+      targetGoal: [0, 0, 78],
       homePosition: leftHome,
       ballSnapshot: sharedBall,
       playerState: {
@@ -83,6 +87,7 @@ describe("opponentController", () => {
       nowMs: 2400,
       deltaSeconds: 0.12,
       difficulty: "normal",
+      targetGoal: [0, 0, 78],
       homePosition: rightHome,
       ballSnapshot: sharedBall,
       playerState: {
@@ -100,5 +105,56 @@ describe("opponentController", () => {
     expect(rightResult.homePosition).toEqual(rightHome);
     expect(leftResult.targetPosition[0]).toBeLessThan(0);
     expect(rightResult.targetPosition[0]).toBeGreaterThan(0);
+  });
+
+  test("does not request a shot when targetGoal is missing", () => {
+    const result = updateOpponentController({
+      nowMs: 1800,
+      deltaSeconds: 0.12,
+      difficulty: "normal",
+      ballSnapshot: {
+        position: [0.5, 0, 56],
+        velocity: [0, 0, 6],
+      },
+      playerState: {
+        position: [2, 0, 40],
+      },
+      opponentState: {
+        ...createInitialOpponentState(),
+        mode: OPPONENT_STATES.INTERCEPT,
+        position: [0.8, 0, 58],
+        rotation: [0, 0, 0],
+        shootCooldownUntilMs: 0,
+      },
+    });
+
+    expect(result.shootRequested).toBe(false);
+    expect(result.mode).not.toBe(OPPONENT_STATES.RECOVER);
+  });
+
+  test("uses targetGoal direction when generating shot vector", () => {
+    const result = updateOpponentController({
+      nowMs: 2000,
+      deltaSeconds: 0.12,
+      difficulty: "normal",
+      targetGoal: [0, 0, -78],
+      ballSnapshot: {
+        position: [0.5, 0, -56],
+        velocity: [0, 0, -6],
+      },
+      playerState: {
+        position: [2, 0, -40],
+      },
+      opponentState: {
+        ...createInitialOpponentState(),
+        mode: OPPONENT_STATES.INTERCEPT,
+        position: [0.8, 0, -58],
+        rotation: [0, 0, 0],
+        shootCooldownUntilMs: 0,
+      },
+    });
+
+    expect(result.shootRequested).toBe(true);
+    expect(result.shotVector[2]).toBeLessThan(0);
   });
 });

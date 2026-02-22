@@ -18,15 +18,12 @@
     "build": "vite build",
     "test": "vitest",
     "test:ci": "vitest run",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint \"src/**/*.{js,jsx}\"",
+    "e2e": "playwright test",
+    "e2e:headed": "playwright test --headed",
     "dev": "vite",
     "preview": "vite preview"
-  },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
   },
   "browserslist": {
     "production": [
@@ -41,10 +38,14 @@
     ]
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.54.2",
+    "@types/node": "^25.3.0",
     "@vitejs/plugin-react": "^5.1.4",
-    "eslint": "^8.57.1",
-    "eslint-config-react-app": "^7.0.1",
+    "eslint": "^10.0.1",
+    "globals": "^16.4.0",
     "jsdom": "^28.1.0",
+    "typescript": "^5.9.3",
     "vite": "^7.3.1",
     "vitest": "^4.0.18"
   }

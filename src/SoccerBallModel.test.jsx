@@ -369,4 +369,55 @@ describe("SoccerBallModel", () => {
     expect(onPassCommandConsumed).toHaveBeenCalledTimes(1);
     expect(api.velocity.set).not.toHaveBeenCalled();
   });
+
+  it("suppresses out-of-bounds callback during replay", () => {
+    const onOutOfBounds = vi.fn();
+
+    render(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled={false}
+        playerControlsEnabled
+        replayActive
+        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
+        onOutOfBounds={onOutOfBounds}
+      />
+    );
+
+    setBallPosition([200, 0, 0]);
+    stepFrame();
+
+    expect(onOutOfBounds).not.toHaveBeenCalled();
+  });
+
+  it("suppresses power-zone callback during replay", () => {
+    const onPowerZoneEnter = vi.fn();
+
+    render(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled={false}
+        playerControlsEnabled
+        replayActive
+        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
+        activePowerZone={{
+          id: "zone-replay",
+          type: "speed",
+          color: "#1dd75f",
+          radius: 7,
+          position: [0, 0],
+        }}
+        onPowerZoneEnter={onPowerZoneEnter}
+      />
+    );
+
+    setBallPosition([0, 1, 0]);
+    stepFrame();
+
+    expect(onPowerZoneEnter).not.toHaveBeenCalled();
+  });
 });

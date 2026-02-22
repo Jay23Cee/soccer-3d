@@ -15,6 +15,10 @@ import GoalNet from "./GoalNet";
 import SoccerPlayer from "./SoccerPlayer";
 import CameraDirector from "./camera/CameraDirector";
 import MatchStoryPanel from "./ui/MatchStoryPanel";
+import useGoalkeeperAI from "./hooks/useGoalkeeperAI";
+import useOpponentAI from "./hooks/useOpponentAI";
+import usePowerPlay from "./hooks/usePowerPlay";
+import useReplayOrchestration from "./hooks/useReplayOrchestration";
 import { createReplayDirector } from "./replay/ReplayDirector";
 import {
   createInitialOpponentState,
@@ -72,6 +76,11 @@ const CONTROL_TARGETS = {
 const TEAM_IDS = {
   TEAM_ONE: "teamOne",
   TEAM_TWO: "teamTwo",
+};
+
+const TEAM_GOAL_TARGETS = {
+  [TEAM_IDS.TEAM_ONE]: [0, 0, -FIELD_CONFIG.LENGTH / 2 + 2],
+  [TEAM_IDS.TEAM_TWO]: [0, 0, FIELD_CONFIG.LENGTH / 2 - 2],
 };
 
 const PLAYER_BOUNDARY_MARGIN = 2;
@@ -530,6 +539,7 @@ function App() {
   const ballResetRef = useRef(null);
   const kickoffRef = useRef(null);
   const cameraRef = useRef(null);
+  const cameraTelemetryRef = useRef(createInitialCameraState());
   const replayDirectorRef = useRef(createReplayDirector());
   const goalCooldownUntilRef = useRef(0);
   const goalResetTimeoutRef = useRef(null);
@@ -622,6 +632,9 @@ function App() {
     }
     if (opponentAiState.mode === OPPONENT_STATES.INTERCEPT) {
       return "intercept";
+    }
+    if (opponentAiState.mode === OPPONENT_STATES.TRACK) {
+      return "track";
     }
     if (opponentAiState.mode === OPPONENT_STATES.RECOVER) {
       return "track";
@@ -786,6 +799,19 @@ function App() {
     [appendTimelineEvent, timeLeft]
   );
 
+  const handleCameraStateChange = useCallback((nextCameraState) => {
+    if (!nextCameraState) {
+      return;
+    }
+
+    cameraTelemetryRef.current = nextCameraState;
+    setCameraState((previous) =>
+      previous.mode === nextCameraState.mode
+        ? previous
+        : { ...previous, mode: nextCameraState.mode }
+    );
+  }, []);
+
   const clearIntroTimers = useCallback(() => {
     if (introTimeoutRef.current) {
       clearTimeout(introTimeoutRef.current);
@@ -891,7 +917,9 @@ function App() {
       teamTwo: createInitialGoalkeeperState(TEAM_IDS.TEAM_TWO),
     });
     setMatchStats(createInitialMatchStats());
-    setCameraState(createInitialCameraState());
+    const initialCameraState = createInitialCameraState();
+    cameraTelemetryRef.current = initialCameraState;
+    setCameraState(initialCameraState);
     setReplayState(createInitialReplayState());
     setReplayFrame(null);
     setBallSnapshot(null);
@@ -1184,10 +1212,10 @@ function App() {
           position: [...keeper.position],
           rotation: [...keeper.rotation],
         })),
-        cameraTarget: [...cameraState.target],
+        cameraTarget: [...cameraTelemetryRef.current.target],
       });
     },
-    [cameraState.target, goalkeeperState.teamOne, goalkeeperState.teamTwo, playerStates]
+    [goalkeeperState.teamOne, goalkeeperState.teamTwo, playerStates]
   );
 
   const handlePossessionChange = useCallback(
@@ -1289,54 +1317,63 @@ function App() {
         return;
       }
 
-      const eventType = shotEvent.type === "save" ? "save" : "shot";
       const teamId = shotEvent.teamId || TEAM_IDS.TEAM_ONE;
 
-      if (eventType === "shot") {
-        setMatchStats((previousStats) => ({
-          ...previousStats,
-          shots: {
-            ...previousStats.shots,
-            [teamId]: (previousStats.shots[teamId] || 0) + 1,
-          },
-          onTarget: {
-            ...previousStats.onTarget,
-            [teamId]: (previousStats.onTarget[teamId] || 0) + 1,
-          },
-        }));
-        updateMomentum(teamId, MATCH_STATS_CONFIG.MOMENTUM_SHOT_SWING);
-        emitTelemetryEvent("shot", { teamId });
-        setCameraState((previous) => ({
-          ...previous,
-          mode: CAMERA_CONFIG.MODES.SHOT,
-        }));
-      } else {
-        const keeperTeamId = shotEvent.teamId || TEAM_IDS.TEAM_ONE;
-        setMatchStats((previousStats) => ({
-          ...previousStats,
-          saves: {
-            ...previousStats.saves,
-            [keeperTeamId]: (previousStats.saves[keeperTeamId] || 0) + 1,
-          },
-        }));
-        updateMomentum(keeperTeamId, MATCH_STATS_CONFIG.MOMENTUM_SAVE_SWING);
-        const telemetryEvent = emitTelemetryEvent("save", { teamId: keeperTeamId });
-        setMatchEvent({
-          type: "save",
-          teamName: telemetryEvent.teamName,
-          id: telemetryEvent.id,
-        });
-        replayDirectorRef.current.armReplay(
-          {
+      switch (shotEvent.type) {
+        case "shot": {
+          setMatchStats((previousStats) => ({
+            ...previousStats,
+            shots: {
+              ...previousStats.shots,
+              [teamId]: (previousStats.shots[teamId] || 0) + 1,
+            },
+            onTarget: {
+              ...previousStats.onTarget,
+              [teamId]: (previousStats.onTarget[teamId] || 0) + 1,
+            },
+          }));
+          updateMomentum(teamId, MATCH_STATS_CONFIG.MOMENTUM_SHOT_SWING);
+          emitTelemetryEvent("shot", { teamId });
+          setCameraState((previous) => ({
+            ...previous,
+            mode: CAMERA_CONFIG.MODES.SHOT,
+          }));
+          break;
+        }
+        case "save": {
+          setMatchStats((previousStats) => ({
+            ...previousStats,
+            saves: {
+              ...previousStats.saves,
+              [teamId]: (previousStats.saves[teamId] || 0) + 1,
+            },
+          }));
+          updateMomentum(teamId, MATCH_STATS_CONFIG.MOMENTUM_SAVE_SWING);
+          const telemetryEvent = emitTelemetryEvent("save", { teamId });
+          setMatchEvent({
             type: "save",
+            teamName: telemetryEvent.teamName,
             id: telemetryEvent.id,
-          },
-          nowMs()
-        );
-        setCameraState((previous) => ({
-          ...previous,
-          mode: CAMERA_CONFIG.MODES.SAVE,
-        }));
+          });
+          replayDirectorRef.current.armReplay(
+            {
+              type: "save",
+              id: telemetryEvent.id,
+            },
+            nowMs()
+          );
+          setCameraState((previous) => ({
+            ...previous,
+            mode: CAMERA_CONFIG.MODES.SAVE,
+          }));
+          break;
+        }
+        case "ball_pop":
+          // Ball-pop is a control event and should not impact shot/save metrics.
+          emitTelemetryEvent("ball_pop", { teamId });
+          break;
+        default:
+          break;
       }
     },
     [emitTelemetryEvent, updateMomentum]
@@ -1405,16 +1442,12 @@ function App() {
     comboStreakRef.current = comboStreak;
   }, [comboStreak]);
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const now = nowMs();
-      const nextReplayState = replayDirectorRef.current.update(now);
-      setReplayState(nextReplayState);
-      setReplayFrame(replayDirectorRef.current.getCurrentFrame());
-    }, 33);
-
-    return () => clearInterval(timer);
-  }, []);
+  useReplayOrchestration({
+    replayDirectorRef,
+    setReplayState,
+    setReplayFrame,
+    nowMs,
+  });
 
   useEffect(() => {
     if (gameState !== GAME_STATES.IN_PLAY || replayActive) {
@@ -1454,188 +1487,50 @@ function App() {
     return () => clearInterval(timer);
   }, [gameState, possessionState?.teamId, replayActive]);
 
-  useEffect(() => {
-    if (gameState !== GAME_STATES.IN_PLAY || replayActive) {
-      return undefined;
-    }
+  useOpponentAI({
+    enabled: gameState === GAME_STATES.IN_PLAY && !replayActive,
+    ballSnapshot,
+    difficulty,
+    aiConfig: AI_CONFIG,
+    teamOnePlayerIds: TEAM_ONE_PLAYER_IDS,
+    teamTwoPlayerIds: TEAM_TWO_PLAYER_IDS,
+    teamIds: TEAM_IDS,
+    teamGoalTargets: TEAM_GOAL_TARGETS,
+    createInitialOpponentState,
+    getPlayerProfile,
+    updateOpponentController,
+    setPlayerStates,
+    setOpponentAiStates,
+    setExternalBallCommand,
+    aiLastUpdateAtRef,
+    nowMs,
+  });
 
-    const timer = setInterval(() => {
-      if (!ballSnapshot) {
-        return;
-      }
+  useGoalkeeperAI({
+    enabled: gameState === GAME_STATES.IN_PLAY && !replayActive,
+    ballSnapshot,
+    difficulty,
+    goalkeeperConfig: GOALKEEPER_CONFIG,
+    updateGoalkeeperController,
+    setGoalkeeperState,
+    setExternalBallCommand,
+    goalkeeperLastUpdateAtRef,
+    nowMs,
+  });
 
-      const now = nowMs();
-      const deltaSeconds =
-        aiLastUpdateAtRef.current > 0
-          ? Math.max(0.01, (now - aiLastUpdateAtRef.current) / 1000)
-          : AI_CONFIG.UPDATE_INTERVAL_MS / 1000;
-      aiLastUpdateAtRef.current = now;
-
-      setPlayerStates((currentStates) => {
-        const nextOpponentAiStates = {};
-        let shotCommand = null;
-        let nextStates = currentStates;
-        let hasPlayerStateChange = false;
-
-        TEAM_TWO_PLAYER_IDS.forEach((opponentId) => {
-          const opponentPlayer = currentStates[opponentId];
-          if (!opponentPlayer) {
-            nextOpponentAiStates[opponentId] = createInitialOpponentState(
-              getPlayerProfile(opponentId).startPosition
-            );
-            return;
-          }
-
-          const nearestTeamOnePlayer = TEAM_ONE_PLAYER_IDS.map((playerId) => currentStates[playerId]).reduce(
-            (closest, candidate) => {
-              if (!candidate) {
-                return closest;
-              }
-              if (!closest) {
-                return candidate;
-              }
-              const candidateDistance = Math.hypot(
-                opponentPlayer.position[0] - candidate.position[0],
-                opponentPlayer.position[2] - candidate.position[2]
-              );
-              const closestDistance = Math.hypot(
-                opponentPlayer.position[0] - closest.position[0],
-                opponentPlayer.position[2] - closest.position[2]
-              );
-              return candidateDistance < closestDistance ? candidate : closest;
-            },
-            null
-          );
-
-          const nextAI = updateOpponentController({
-            nowMs: now,
-            deltaSeconds,
-            difficulty,
-            ballSnapshot,
-            playerState: nearestTeamOnePlayer,
-            opponentState: opponentPlayer,
-            homePosition: getPlayerProfile(opponentId).startPosition,
-          });
-
-          nextOpponentAiStates[opponentId] = nextAI;
-
-          if (!shotCommand && nextAI.shootRequested && nextAI.shotVector) {
-            shotCommand = {
-              id: `ai-shot-${opponentId}-${now}`,
-              type: "impulse",
-              vector: [nextAI.shotVector[0] * 11, 1.8, nextAI.shotVector[2] * 11],
-              event: {
-                type: "shot",
-                teamId: TEAM_IDS.TEAM_TWO,
-                releasedAtMs: now,
-              },
-            };
-          }
-
-          const nextPosition = nextAI.nextPosition || opponentPlayer.position;
-          const nextRotation = nextAI.nextRotation || opponentPlayer.rotation;
-          if (!hasPlayerStateChange) {
-            const positionChanged =
-              !opponentPlayer.position ||
-              Math.abs(opponentPlayer.position[0] - nextPosition[0]) > 0.0001 ||
-              Math.abs(opponentPlayer.position[2] - nextPosition[2]) > 0.0001;
-            const rotationChanged =
-              !opponentPlayer.rotation ||
-              Math.abs(opponentPlayer.rotation[1] - nextRotation[1]) > 0.0001;
-            hasPlayerStateChange = positionChanged || rotationChanged;
-          }
-
-          if (hasPlayerStateChange) {
-            if (nextStates === currentStates) {
-              nextStates = { ...currentStates };
-            }
-            nextStates[opponentId] = {
-              ...opponentPlayer,
-              position: nextPosition,
-              rotation: nextRotation,
-            };
-          }
-        });
-
-        setOpponentAiStates((current) => ({
-          ...current,
-          ...nextOpponentAiStates,
-        }));
-
-        if (shotCommand) {
-          setExternalBallCommand(shotCommand);
-        }
-
-        return nextStates;
-      });
-    }, AI_CONFIG.UPDATE_INTERVAL_MS);
-
-    return () => clearInterval(timer);
-  }, [ballSnapshot, difficulty, gameState, replayActive]);
-
-  useEffect(() => {
-    if (gameState !== GAME_STATES.IN_PLAY || replayActive) {
-      return undefined;
-    }
-
-    const timer = setInterval(() => {
-      if (!ballSnapshot) {
-        return;
-      }
-
-      const now = nowMs();
-      const deltaSeconds =
-        goalkeeperLastUpdateAtRef.current > 0
-          ? Math.max(0.01, (now - goalkeeperLastUpdateAtRef.current) / 1000)
-          : GOALKEEPER_CONFIG.UPDATE_INTERVAL_MS / 1000;
-      goalkeeperLastUpdateAtRef.current = now;
-
-      setGoalkeeperState((currentState) => {
-        const nextTeamOne = updateGoalkeeperController({
-          nowMs: now,
-          deltaSeconds,
-          difficulty,
-          keeperState: currentState.teamOne,
-          ballSnapshot,
-        });
-        const nextTeamTwo = updateGoalkeeperController({
-          nowMs: now,
-          deltaSeconds,
-          difficulty,
-          keeperState: currentState.teamTwo,
-          ballSnapshot,
-        });
-
-        const saveKeeper = nextTeamOne.saveRequested
-          ? nextTeamOne
-          : nextTeamTwo.saveRequested
-            ? nextTeamTwo
-            : null;
-
-        if (saveKeeper?.distributeImpulse) {
-          setExternalBallCommand({
-            id: `keeper-save-${saveKeeper.teamId}-${now}`,
-            type: "velocity",
-            vector: saveKeeper.distributeImpulse.map((value, index) =>
-              index === 1 ? value * 10 : value
-            ),
-            event: {
-              type: "save",
-              teamId: saveKeeper.teamId,
-              releasedAtMs: now,
-            },
-          });
-        }
-
-        return {
-          teamOne: nextTeamOne,
-          teamTwo: nextTeamTwo,
-        };
-      });
-    }, GOALKEEPER_CONFIG.UPDATE_INTERVAL_MS);
-
-    return () => clearInterval(timer);
-  }, [ballSnapshot, difficulty, gameState, replayActive]);
+  usePowerPlay({
+    activePowerZone,
+    activeBoost,
+    gameState,
+    inPlayState: GAME_STATES.IN_PLAY,
+    spawnDelayMs: POWER_PLAY_CONFIG.SPAWN_DELAY_MS,
+    spawnPowerZone,
+    powerZoneSpawnTimeoutRef,
+    powerZoneExpireTimeoutRef,
+    setActivePowerZone,
+    setBoostTimeLeftMs,
+    nowMs,
+  });
 
   useEffect(() => {
     if (replayState.isPlaying || gameState !== GAME_STATES.IN_PLAY) {
@@ -1818,27 +1713,6 @@ function App() {
   }, [comboStreak, gameState]);
 
   useEffect(() => {
-    if (gameState === GAME_STATES.IN_PLAY && !activePowerZone) {
-      if (powerZoneSpawnTimeoutRef.current) {
-        clearTimeout(powerZoneSpawnTimeoutRef.current);
-      }
-
-      powerZoneSpawnTimeoutRef.current = setTimeout(() => {
-        spawnPowerZone();
-      }, POWER_PLAY_CONFIG.SPAWN_DELAY_MS);
-
-      return () => {
-        if (powerZoneSpawnTimeoutRef.current) {
-          clearTimeout(powerZoneSpawnTimeoutRef.current);
-          powerZoneSpawnTimeoutRef.current = null;
-        }
-      };
-    }
-
-    return undefined;
-  }, [activePowerZone, gameState, spawnPowerZone]);
-
-  useEffect(() => {
     const handleKeyDown = (event) => {
       if ((event.key === "r" || event.key === "R") && replayState.canSkip) {
         event.preventDefault();
@@ -1942,41 +1816,6 @@ function App() {
 
     return () => clearInterval(timer);
   }, [clearPlayerInput, movePlayer, playerControlsEnabled]);
-
-  useEffect(() => {
-    if (gameState === GAME_STATES.IN_PLAY) {
-      return;
-    }
-
-    if (powerZoneSpawnTimeoutRef.current) {
-      clearTimeout(powerZoneSpawnTimeoutRef.current);
-      powerZoneSpawnTimeoutRef.current = null;
-    }
-
-    if (powerZoneExpireTimeoutRef.current) {
-      clearTimeout(powerZoneExpireTimeoutRef.current);
-      powerZoneExpireTimeoutRef.current = null;
-    }
-
-    setActivePowerZone(null);
-  }, [gameState]);
-
-  useEffect(() => {
-    if (!activeBoost) {
-      setBoostTimeLeftMs(0);
-      return undefined;
-    }
-
-    const updateRemaining = () => {
-      const msLeft = Math.max(0, activeBoost.expiresAt - nowMs());
-      setBoostTimeLeftMs(msLeft);
-    };
-
-    updateRemaining();
-    const timer = setInterval(updateRemaining, 100);
-
-    return () => clearInterval(timer);
-  }, [activeBoost]);
 
   useEffect(() => {
     return () => {
@@ -2212,7 +2051,7 @@ function App() {
           introProgress={introProgress}
           gameState={gameState}
           cameraNudge={cameraNudge}
-          onCameraStateChange={setCameraState}
+          onCameraStateChange={handleCameraStateChange}
         />
         <fog attach="fog" args={["#04101f", 120, 410]} />
         <hemisphereLight skyColor="#8ed4ff" groundColor="#1f2c42" intensity={0.62} />

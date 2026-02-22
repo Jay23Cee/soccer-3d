@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import { useBox, usePlane } from "@react-three/cannon";
 import { useTexture } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
@@ -45,9 +45,10 @@ function SoccerField({ activePowerZone }) {
   const boundaryXLimit = trackOuterHalfWidth + 2;
   const boundaryZLimit = trackOuterHalfLength + 2;
   const laneStep = TRACK_CONFIG.WIDTH / TRACK_CONFIG.LANE_COUNT;
-  const laneOffsets = Array.from(
-    { length: TRACK_CONFIG.LANE_COUNT - 1 },
-    (_, index) => (index + 1) * laneStep
+  const laneOffsets = useMemo(
+    () =>
+      Array.from({ length: TRACK_CONFIG.LANE_COUNT - 1 }, (_, index) => (index + 1) * laneStep),
+    [laneStep]
   );
   const trackShape = useMemo(() => {
     const shape = new THREE.Shape();
@@ -67,6 +68,26 @@ function SoccerField({ activePowerZone }) {
 
     return shape;
   }, [LENGTH, WIDTH, trackOuterHalfLength, trackOuterHalfWidth]);
+  const fieldBoundaryGeometry = useMemo(() => new THREE.PlaneGeometry(WIDTH, LENGTH), [WIDTH, LENGTH]);
+  const laneBoundaryGeometries = useMemo(
+    () =>
+      laneOffsets.map(
+        (offset) => new THREE.PlaneGeometry(WIDTH + offset * 2, LENGTH + offset * 2)
+      ),
+    [LENGTH, WIDTH, laneOffsets]
+  );
+  const goalOuterBoxGeometry = useMemo(() => new THREE.PlaneGeometry(44, 18), []);
+  const goalInnerBoxGeometry = useMemo(() => new THREE.PlaneGeometry(36, 6), []);
+
+  useEffect(
+    () => () => {
+      fieldBoundaryGeometry.dispose();
+      laneBoundaryGeometries.forEach((geometry) => geometry.dispose());
+      goalOuterBoxGeometry.dispose();
+      goalInnerBoxGeometry.dispose();
+    },
+    [fieldBoundaryGeometry, goalOuterBoxGeometry, goalInnerBoxGeometry, laneBoundaryGeometries]
+  );
 
   grassColor.colorSpace = THREE.SRGBColorSpace;
 
@@ -126,7 +147,7 @@ function SoccerField({ activePowerZone }) {
 
       <group>
         <lineSegments position={[0, MARKING_OFFSET_Y + 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <edgesGeometry args={[new THREE.PlaneGeometry(WIDTH, LENGTH)]} />
+          <edgesGeometry args={[fieldBoundaryGeometry]} />
           <lineBasicMaterial
             color={FIELD_BORDER_CONFIG.COLOR}
             transparent
@@ -140,7 +161,7 @@ function SoccerField({ activePowerZone }) {
             position={[0, MARKING_OFFSET_Y - 0.015, 0]}
             rotation={[-Math.PI / 2, 0, 0]}
           >
-            <edgesGeometry args={[new THREE.PlaneGeometry(WIDTH + offset * 2, LENGTH + offset * 2)]} />
+            <edgesGeometry args={[laneBoundaryGeometries[index]]} />
             <lineBasicMaterial color={TRACK_CONFIG.LANE_COLOR} transparent opacity={0.46} />
           </lineSegments>
         ))}
@@ -163,12 +184,12 @@ function SoccerField({ activePowerZone }) {
         {[{ z: -75 }, { z: 75 }].map(({ z }, idx) => (
           <group key={`goal-marking-${idx}`}>
             <lineSegments position={[0, MARKING_OFFSET_Y, z]} rotation={[-Math.PI / 2, 0, 0]}>
-              <edgesGeometry args={[new THREE.PlaneGeometry(44, 18)]} />
+              <edgesGeometry args={[goalOuterBoxGeometry]} />
               <lineBasicMaterial color="#ffffff" />
             </lineSegments>
 
             <lineSegments position={[0, MARKING_OFFSET_Y, z]} rotation={[-Math.PI / 2, 0, 0]}>
-              <edgesGeometry args={[new THREE.PlaneGeometry(36, 6)]} />
+              <edgesGeometry args={[goalInnerBoxGeometry]} />
               <lineBasicMaterial color="#ffffff" />
             </lineSegments>
 

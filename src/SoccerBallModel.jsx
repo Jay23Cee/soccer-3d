@@ -481,6 +481,10 @@ function SoccerBallModel({
     const unsubscribePosition = api.position.subscribe(([x, y, z]) => {
       ballPositionRef.current = [x, y, z];
 
+      if (replayActive) {
+        return;
+      }
+
       if (!onOutOfBounds || outOfBoundsLockRef.current) {
         return;
       }
@@ -525,7 +529,7 @@ function SoccerBallModel({
         clearTimeout(outOfBoundsTimerRef.current);
       }
     };
-  }, [activePowerZone, api, onOutOfBounds, onPowerZoneEnter]);
+  }, [activePowerZone, api, onOutOfBounds, onPowerZoneEnter, replayActive]);
 
   useFrame(() => {
     const now = getNowMs();
@@ -729,7 +733,7 @@ function SoccerBallModel({
       return;
     }
 
-    if (!Array.isArray(teamOneRoster) || teamOneRoster.length === 0) {
+    if (teamOneRoster.length === 0) {
       if (possessionRef.current) {
         possessionRef.current = null;
         emitPossessionChange(null);

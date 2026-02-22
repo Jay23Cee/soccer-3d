@@ -98,6 +98,13 @@ vi.mock("./SoccerBallModel", () => ({
         </button>
         <button
           type="button"
+          data-testid="mock-ball-pop"
+          onClick={() => onShotEvent?.({ type: "ball_pop", teamId: "teamOne" })}
+        >
+          mock-ball-pop
+        </button>
+        <button
+          type="button"
           data-testid="mock-possession"
           onClick={() => onPossessionChange?.({ teamId: "teamOne", playerId: "player_one" })}
         >
@@ -227,6 +234,7 @@ describe("App", () => {
 
     fireEvent.click(screen.getByTestId("mock-shot"));
     fireEvent.click(screen.getByTestId("mock-save"));
+    fireEvent.click(screen.getByTestId("mock-ball-pop"));
 
     expect(screen.getByText(/Shots/i)).toHaveTextContent("1 - 0");
     expect(screen.getByText(/Saves/i)).toHaveTextContent("1 - 0");

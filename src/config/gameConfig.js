@@ -234,6 +234,13 @@ export const GOALKEEPER_CONFIG = {
 
 export const CAMERA_CONFIG = {
   MODES: {
+    BROADCAST_WIDE: "broadcast-wide",
+    PLAYER_CHASE: "player-chase",
+    GOAL_LINE: "goal-line",
+    FREE_ROAM: "free-roam",
+    BEHIND_PLAYER_WEST: "behind-player-west",
+    SIDE_LEFT: "side-left",
+    SIDE_RIGHT: "side-right",
     BUILD_UP: "build-up",
     ATTACKING_THIRD: "attacking-third",
     SHOT: "shot",
@@ -246,6 +253,13 @@ export const CAMERA_CONFIG = {
   TRANSITION_ALPHA: 0.08,
   REPLAY_TRANSITION_ALPHA: 0.12,
   FOV: {
+    BROADCAST_WIDE: 52,
+    PLAYER_CHASE: 48,
+    GOAL_LINE: 45,
+    FREE_ROAM: 56,
+    BEHIND_PLAYER_WEST: 50,
+    SIDE_LEFT: 47,
+    SIDE_RIGHT: 47,
     BUILD_UP: 50,
     ATTACKING_THIRD: 46,
     SHOT: 43,

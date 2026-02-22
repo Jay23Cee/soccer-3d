@@ -1,6 +1,7 @@
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { vi } from "vitest";
+import { CAMERA_CONFIG } from "./config/gameConfig";
 
 const UNSUPPORTED_CANVAS_TAGS = new Set(["hemisphereLight", "directionalLight", "fog"]);
 
@@ -41,6 +42,19 @@ vi.mock(
 
 vi.mock("./camera/CameraDirector", () => ({ default: () => null }));
 vi.mock("./SoccerField", () => ({ default: () => <div data-testid="soccer-field" /> }));
+let replayStateOverride = null;
+vi.mock("./hooks/useReplayOrchestration", () => ({
+  default: ({ setReplayState, setReplayFrame }) => {
+    React.useEffect(() => {
+      if (!replayStateOverride) {
+        return;
+      }
+
+      setReplayState(replayStateOverride);
+      setReplayFrame(null);
+    }, [setReplayFrame, setReplayState]);
+  },
+}));
 let mockSnapshotTime = 0;
 vi.mock("./SoccerBallModel", () => ({
   default: ({
@@ -158,6 +172,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   mockSnapshotTime = 0;
+  replayStateOverride = null;
 });
 
 function startAndSkipIntro() {
@@ -192,6 +207,103 @@ describe("App", () => {
     expect(playerControlButton).toHaveAttribute("aria-pressed", "false");
     expect(ballControlButton).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByTestId("shot-meter")).not.toBeInTheDocument();
+  });
+
+  test("shows six soccer camera POV options in the menu", () => {
+    render(<App />);
+
+    const povSelect = screen.getByLabelText("Camera POV");
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
+
+    const optionLabels = Array.from(povSelect.querySelectorAll("option")).map((option) =>
+      option.textContent?.trim()
+    );
+
+    expect(optionLabels).toEqual([
+      "Broadcast Wide",
+      "Player Chase",
+      "Behind Player (West of Ball)",
+      "Attacking Third",
+      "Goal Line",
+      "Free Roam",
+    ]);
+
+    fireEvent.change(povSelect, { target: { value: CAMERA_CONFIG.MODES.FREE_ROAM } });
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.FREE_ROAM);
+  });
+
+  test("shows movement mapping select with Auto default", () => {
+    render(<App />);
+
+    const mappingSelect = screen.getByLabelText("Movement Mapping");
+    expect(mappingSelect).toHaveValue("auto");
+  });
+
+  test("supports camera hotkeys for cycle and direct slot jump", () => {
+    render(<App />);
+
+    const povSelect = screen.getByLabelText("Camera POV");
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
+
+    fireEvent.keyDown(window, { key: "e" });
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.PLAYER_CHASE);
+
+    fireEvent.keyDown(window, { key: "q" });
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
+
+    fireEvent.keyDown(window, { key: "4" });
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.ATTACKING_THIRD);
+
+    fireEvent.keyDown(window, { key: "6" });
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.FREE_ROAM);
+  });
+
+  test("keeps Camera POV select enabled while replay is playing", async () => {
+    replayStateOverride = {
+      mode: "playing",
+      isPlaying: true,
+      canSkip: true,
+      eventType: "goal",
+      eventId: "evt-replay",
+      currentPlaybackIndex: 3,
+      totalPlaybackFrames: 18,
+    };
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Status: Idle \| Replay/i)).toBeInTheDocument();
+    });
+
+    const povSelect = screen.getByLabelText("Camera POV");
+    expect(povSelect).toBeEnabled();
+  });
+
+  test("supports camera hotkeys while replay is playing", async () => {
+    replayStateOverride = {
+      mode: "playing",
+      isPlaying: true,
+      canSkip: true,
+      eventType: "goal",
+      eventId: "evt-replay",
+      currentPlaybackIndex: 3,
+      totalPlaybackFrames: 18,
+    };
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Status: Idle \| Replay/i)).toBeInTheDocument();
+    });
+
+    const povSelect = screen.getByLabelText("Camera POV");
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
+
+    fireEvent.keyDown(window, { key: "e" });
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.PLAYER_CHASE);
+
+    fireEvent.keyDown(window, { key: "4" });
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.ATTACKING_THIRD);
   });
 
   test("starts match into intro and can skip to in-play controls", () => {

@@ -1,7 +1,7 @@
 import React from "react";
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { SHOT_METER_CONFIG } from "./config/gameConfig";
+import { BALL_CONFIG, SHOT_METER_CONFIG } from "./config/gameConfig";
 
 let frameCallback;
 let velocity;
@@ -368,6 +368,54 @@ describe("SoccerBallModel", () => {
 
     expect(onPassCommandConsumed).toHaveBeenCalledTimes(1);
     expect(api.velocity.set).not.toHaveBeenCalled();
+  });
+
+  it("uses mapMovementKeyToForce callback for ball directional input", () => {
+    const mapMovementKeyToForce = vi.fn(() => [3, 0, 4]);
+
+    render(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled
+        mapMovementKeyToForce={mapMovementKeyToForce}
+        playerControlsEnabled={false}
+        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
+      />
+    );
+
+    api.applyForce.mockClear();
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
+    });
+    stepFrame();
+
+    expect(mapMovementKeyToForce).toHaveBeenCalledWith("ArrowUp", BALL_CONFIG.FORCE);
+    expect(api.applyForce).toHaveBeenCalledWith([3, 0, 4], [0, 0, 0]);
+  });
+
+  it("falls back to world-axis directional input when no mapping callback is provided", () => {
+    render(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled
+        playerControlsEnabled={false}
+        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
+      />
+    );
+
+    api.applyForce.mockClear();
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft" }));
+    });
+    stepFrame();
+
+    expect(api.applyForce).toHaveBeenCalledWith([-BALL_CONFIG.FORCE, 0, 0], [0, 0, 0]);
   });
 
   it("suppresses out-of-bounds callback during replay", () => {

@@ -706,6 +706,32 @@
   border: 2px solid #0f2433;
 }
 
+.camera-pov-wrap {
+  margin-bottom: 0.9rem;
+}
+
+.camera-pov-select {
+  width: 100%;
+  margin-top: 0.45rem;
+  padding: 0.52rem 0.56rem;
+  border-radius: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(11, 26, 39, 0.92);
+  color: #e8f4ff;
+  font-size: 0.87rem;
+  font-weight: 600;
+}
+
+.camera-pov-select:focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.8);
+  outline-offset: 2px;
+}
+
+.camera-pov-select:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
 .controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(120px, 1fr));

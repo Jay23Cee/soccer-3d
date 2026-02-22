@@ -32,3 +32,29 @@ test("supports control target switching from player to ball", async ({ page }) =
   await expect(playerControl).toHaveAttribute("aria-pressed", "false");
   await expect(ballControl).toHaveAttribute("aria-pressed", "true");
 });
+
+test("shows expanded camera options and supports camera hotkeys", async ({ page }) => {
+  await page.goto("/");
+
+  const povSelect = page.getByLabel("Camera POV");
+  await expect(povSelect).toHaveValue("broadcast-wide");
+
+  const optionLabels = await povSelect.locator("option").allTextContents();
+  expect(optionLabels).toEqual([
+    "Broadcast Wide",
+    "Player Chase",
+    "Behind Player (West of Ball)",
+    "Attacking Third",
+    "Goal Line",
+    "Free Roam",
+  ]);
+
+  await page.keyboard.press("KeyE");
+  await expect(povSelect).toHaveValue("player-chase");
+
+  await page.keyboard.press("Digit4");
+  await expect(povSelect).toHaveValue("attacking-third");
+
+  await page.keyboard.press("Digit6");
+  await expect(povSelect).toHaveValue("free-roam");
+});

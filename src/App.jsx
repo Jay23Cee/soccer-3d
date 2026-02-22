@@ -54,6 +54,11 @@ import {
   REPLAY_CONFIG,
   SHOT_METER_CONFIG,
 } from "./config/gameConfig";
+import {
+  MOVEMENT_MAPPING_MODES,
+  mapArrowStateToWorldDirection,
+  mapSingleArrowKeyToWorldForce,
+} from "./input/movementMapping";
 import "./App.css";
 
 const TEAM_ONE = {
@@ -89,6 +94,47 @@ const ACTIVE_PLAYER_STRENGTHS = {
   player_one: "Kick + Speed",
   player_two: "Support Runner",
 };
+const CAMERA_POV_OPTIONS = [
+  {
+    value: CAMERA_CONFIG.MODES.BROADCAST_WIDE,
+    label: "Broadcast Wide",
+  },
+  {
+    value: CAMERA_CONFIG.MODES.PLAYER_CHASE,
+    label: "Player Chase",
+  },
+  {
+    value: CAMERA_CONFIG.MODES.BEHIND_PLAYER_WEST,
+    label: "Behind Player (West of Ball)",
+  },
+  {
+    value: CAMERA_CONFIG.MODES.ATTACKING_THIRD,
+    label: "Attacking Third",
+  },
+  {
+    value: CAMERA_CONFIG.MODES.GOAL_LINE,
+    label: "Goal Line",
+  },
+  {
+    value: CAMERA_CONFIG.MODES.FREE_ROAM,
+    label: "Free Roam",
+  },
+];
+
+const MOVEMENT_MAPPING_OPTIONS = [
+  {
+    value: MOVEMENT_MAPPING_MODES.AUTO,
+    label: "Auto (Per Camera)",
+  },
+  {
+    value: MOVEMENT_MAPPING_MODES.CAMERA,
+    label: "Camera Relative",
+  },
+  {
+    value: MOVEMENT_MAPPING_MODES.WORLD,
+    label: "World Relative",
+  },
+];
 
 const SHOT_METER_IDLE = {
   isCharging: false,
@@ -128,10 +174,10 @@ function createInitialMatchStats() {
 
 function createInitialCameraState() {
   return {
-    mode: CAMERA_CONFIG.MODES.BUILD_UP,
+    mode: CAMERA_CONFIG.MODES.BROADCAST_WIDE,
     position: [...INTRO_CONFIG.CAMERA_END],
     target: [0, 0, 0],
-    fov: CAMERA_CONFIG.FOV.BUILD_UP,
+    fov: CAMERA_CONFIG.FOV.BROADCAST_WIDE,
   };
 }
 
@@ -277,6 +323,19 @@ function detectQualityMode() {
     typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
 
   return isSmallViewport || isCoarsePointer ? "mobile" : "desktop";
+}
+
+function isEditableElement(element) {
+  if (!element || typeof element !== "object") {
+    return false;
+  }
+
+  if (element.isContentEditable) {
+    return true;
+  }
+
+  const tagName = typeof element.tagName === "string" ? element.tagName.toLowerCase() : "";
+  return tagName === "input" || tagName === "select" || tagName === "textarea";
 }
 
 function statusText(gameState) {
@@ -510,6 +569,8 @@ function App() {
   const [boostTimeLeftMs, setBoostTimeLeftMs] = useState(0);
   const [matchEvent, setMatchEvent] = useState(null);
   const [controlTarget, setControlTarget] = useState(CONTROL_TARGETS.PLAYER);
+  const [cameraPovMode, setCameraPovMode] = useState(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
+  const [movementMappingMode, setMovementMappingMode] = useState(MOVEMENT_MAPPING_MODES.AUTO);
   const [playerStates, setPlayerStates] = useState(() => createInitialPlayerStates());
   const [activePlayerId, setActivePlayerId] = useState(() => TEAM_ONE_PLAYER_IDS[0]);
   const [isSprintHeld, setIsSprintHeld] = useState(false);
@@ -526,7 +587,7 @@ function App() {
     teamOne: createInitialGoalkeeperState(TEAM_IDS.TEAM_ONE),
     teamTwo: createInitialGoalkeeperState(TEAM_IDS.TEAM_TWO),
   }));
-  const [cameraState, setCameraState] = useState(() => createInitialCameraState());
+  const [, setCameraState] = useState(() => createInitialCameraState());
   const [replayState, setReplayState] = useState(() => createInitialReplayState());
   const [replayFrame, setReplayFrame] = useState(null);
   const [matchStats, setMatchStats] = useState(() => createInitialMatchStats());
@@ -570,6 +631,7 @@ function App() {
   });
 
   const replayActive = replayState.isPlaying;
+  const freeRoamCameraEnabled = cameraPovMode === CAMERA_CONFIG.MODES.FREE_ROAM;
   const controlsEnabled = gameState === GAME_STATES.IN_PLAY && !replayActive;
   const ballControlsEnabled = controlsEnabled && controlTarget === CONTROL_TARGETS.BALL;
   const playerControlsEnabled = controlsEnabled && controlTarget === CONTROL_TARGETS.PLAYER;
@@ -920,6 +982,8 @@ function App() {
     const initialCameraState = createInitialCameraState();
     cameraTelemetryRef.current = initialCameraState;
     setCameraState(initialCameraState);
+    setCameraPovMode(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
+    setMovementMappingMode(MOVEMENT_MAPPING_MODES.AUTO);
     setReplayState(createInitialReplayState());
     setReplayFrame(null);
     setBallSnapshot(null);
@@ -993,21 +1057,13 @@ function App() {
   const movePlayer = useCallback(
     (deltaSeconds) => {
       const input = playerInputRef.current;
-      let directionX = 0;
-      let directionZ = 0;
-
-      if (input.ArrowLeft) {
-        directionX -= 1;
-      }
-      if (input.ArrowRight) {
-        directionX += 1;
-      }
-      if (input.ArrowUp) {
-        directionZ -= 1;
-      }
-      if (input.ArrowDown) {
-        directionZ += 1;
-      }
+      const mappedDirection = mapArrowStateToWorldDirection(input, {
+        overrideMode: movementMappingMode,
+        cameraMode: cameraPovMode,
+        cameraState: cameraTelemetryRef.current,
+      });
+      const directionX = mappedDirection[0];
+      const directionZ = mappedDirection[2];
 
       const isMoving = directionX !== 0 || directionZ !== 0;
 
@@ -1034,9 +1090,8 @@ function App() {
         let nextRotation = currentRotation;
 
         if (isMoving) {
-          const directionMagnitude = Math.hypot(directionX, directionZ);
-          const normalizedX = directionX / directionMagnitude;
-          const normalizedZ = directionZ / directionMagnitude;
+          const normalizedX = directionX;
+          const normalizedZ = directionZ;
           const nextYaw = Math.atan2(normalizedX, normalizedZ);
 
           const nextX = clamp(
@@ -1104,7 +1159,17 @@ function App() {
         };
       });
     },
-    [activePlayerId, isSprintHeld, playerBounds.x, playerBounds.z]
+    [activePlayerId, cameraPovMode, isSprintHeld, movementMappingMode, playerBounds.x, playerBounds.z]
+  );
+
+  const mapMovementKeyToForce = useCallback(
+    (key, magnitude) =>
+      mapSingleArrowKeyToWorldForce(key, magnitude, {
+        overrideMode: movementMappingMode,
+        cameraMode: cameraPovMode,
+        cameraState: cameraTelemetryRef.current,
+      }),
+    [cameraPovMode, movementMappingMode]
   );
 
   const handleGoal = useCallback(
@@ -1142,10 +1207,6 @@ function App() {
         },
         now
       );
-      setCameraState((previous) => ({
-        ...previous,
-        mode: CAMERA_CONFIG.MODES.GOAL,
-      }));
       triggerOverlayPulse("goal");
       triggerCameraNudge(1.1);
 
@@ -1177,11 +1238,6 @@ function App() {
 
   const handleKickRelease = useCallback(
     (kickRelease) => {
-      setCameraState((previous) => ({
-        ...previous,
-        mode: CAMERA_CONFIG.MODES.SHOT,
-      }));
-
       if (!kickRelease?.isPerfect) {
         return;
       }
@@ -1334,10 +1390,6 @@ function App() {
           }));
           updateMomentum(teamId, MATCH_STATS_CONFIG.MOMENTUM_SHOT_SWING);
           emitTelemetryEvent("shot", { teamId });
-          setCameraState((previous) => ({
-            ...previous,
-            mode: CAMERA_CONFIG.MODES.SHOT,
-          }));
           break;
         }
         case "save": {
@@ -1362,10 +1414,6 @@ function App() {
             },
             nowMs()
           );
-          setCameraState((previous) => ({
-            ...previous,
-            mode: CAMERA_CONFIG.MODES.SAVE,
-          }));
           break;
         }
         case "ball_pop":
@@ -1533,43 +1581,6 @@ function App() {
   });
 
   useEffect(() => {
-    if (replayState.isPlaying || gameState !== GAME_STATES.IN_PLAY) {
-      return;
-    }
-
-    const ballZ = ballSnapshot?.position?.[2] || 0;
-    const speed = ballSnapshot?.velocity
-      ? Math.hypot(
-          ballSnapshot.velocity[0],
-          ballSnapshot.velocity[1],
-          ballSnapshot.velocity[2]
-        )
-      : 0;
-
-    let nextMode = CAMERA_CONFIG.MODES.BUILD_UP;
-    if (Math.abs(ballZ) > FIELD_CONFIG.LENGTH * 0.25) {
-      nextMode = CAMERA_CONFIG.MODES.ATTACKING_THIRD;
-    }
-    if (speed > 16) {
-      nextMode = CAMERA_CONFIG.MODES.SHOT;
-    }
-
-    setCameraState((previous) => (previous.mode === nextMode ? previous : { ...previous, mode: nextMode }));
-  }, [ballSnapshot, gameState, replayState.isPlaying]);
-
-  useEffect(() => {
-    if (!replayState.isPlaying) {
-      return;
-    }
-
-    setCameraState((previous) =>
-      previous.mode === CAMERA_CONFIG.MODES.REPLAY
-        ? previous
-        : { ...previous, mode: CAMERA_CONFIG.MODES.REPLAY }
-    );
-  }, [replayState.isPlaying]);
-
-  useEffect(() => {
     if (typeof window === "undefined") {
       return undefined;
     }
@@ -1714,10 +1725,41 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (event) => {
+      const normalizedKey = typeof event.key === "string" ? event.key.toLowerCase() : "";
+
       if ((event.key === "r" || event.key === "R") && replayState.canSkip) {
         event.preventDefault();
         replayDirectorRef.current.skip(nowMs());
         return;
+      }
+
+      const activeElement = typeof document !== "undefined" ? document.activeElement : null;
+      const cameraHotkeysEnabled =
+        !isEditableElement(activeElement) &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey;
+
+      if (cameraHotkeysEnabled && !event.repeat && (normalizedKey === "q" || normalizedKey === "e")) {
+        event.preventDefault();
+        setCameraPovMode((currentMode) => {
+          const currentIndex = CAMERA_POV_OPTIONS.findIndex((option) => option.value === currentMode);
+          const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+          const direction = normalizedKey === "e" ? 1 : -1;
+          const nextIndex =
+            (safeIndex + direction + CAMERA_POV_OPTIONS.length) % CAMERA_POV_OPTIONS.length;
+          return CAMERA_POV_OPTIONS[nextIndex].value;
+        });
+        return;
+      }
+
+      if (cameraHotkeysEnabled && !event.repeat && /^[1-8]$/.test(normalizedKey)) {
+        const directIndex = Number.parseInt(normalizedKey, 10) - 1;
+        if (directIndex >= 0 && directIndex < CAMERA_POV_OPTIONS.length) {
+          event.preventDefault();
+          setCameraPovMode(CAMERA_POV_OPTIONS[directIndex].value);
+          return;
+        }
       }
 
       if (event.key === PLAYER_SWITCH_CONFIG.KEY) {
@@ -1740,8 +1782,6 @@ function App() {
       if (!playerControlsEnabled) {
         return;
       }
-
-      const normalizedKey = typeof event.key === "string" ? event.key.toLowerCase() : "";
 
       if (normalizedKey === PLAYER_PASS_CONFIG.KEY) {
         event.preventDefault();
@@ -1962,6 +2002,50 @@ function App() {
           />
         </label>
 
+        <label className="slider-wrap camera-pov-wrap">
+          <span className="slider-row">
+            <span>Camera POV</span>
+            <strong className="slider-value">
+              {CAMERA_POV_OPTIONS.find((option) => option.value === cameraPovMode)?.label || "Custom"}
+            </strong>
+          </span>
+          <select
+            className="camera-pov-select"
+            aria-label="Camera POV"
+            value={cameraPovMode}
+            onChange={(event) => setCameraPovMode(event.target.value)}
+          >
+            {CAMERA_POV_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="slider-wrap camera-pov-wrap">
+          <span className="slider-row">
+            <span>Movement Mapping</span>
+            <strong className="slider-value">
+              {MOVEMENT_MAPPING_OPTIONS.find((option) => option.value === movementMappingMode)
+                ?.label || "Auto (Per Camera)"}
+            </strong>
+          </span>
+          <select
+            className="camera-pov-select"
+            aria-label="Movement Mapping"
+            value={movementMappingMode}
+            onChange={(event) => setMovementMappingMode(event.target.value)}
+            disabled={replayState.isPlaying}
+          >
+            {MOVEMENT_MAPPING_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <div className="controls">
           <button
             className={controlTarget === CONTROL_TARGETS.PLAYER ? "btn-primary" : "btn-ghost"}
@@ -2021,7 +2105,9 @@ function App() {
           {controlTarget === CONTROL_TARGETS.PLAYER
             ? "Controls: Arrow keys move your player. Hold A to sprint. Touch the ball to dribble, hold D to charge, release to kick. Press S to pass to your teammate. Press Tab to switch players when Team One has no possession."
             : "Controls: Arrow keys move the ball and D pops it upward. Switch to Player mode to run the player."}{" "}
-          Capture power-play zones quickly to build combo multipliers. Press R to skip replay.
+          Capture power-play zones quickly to build combo multipliers. Press R to skip replay. Camera hotkeys: Q/E
+          cycle POV and 1-8 jumps to camera slots. Movement Mapping lets you force camera-relative or world-relative
+          movement.
         </p>
 
         <MatchStoryPanel
@@ -2042,10 +2128,11 @@ function App() {
         <PerspectiveCamera ref={cameraRef} makeDefault position={cameraPosition} fov={cameraFov} />
         <CameraDirector
           cameraRef={cameraRef}
-          mode={cameraState.mode}
+          mode={cameraPovMode}
           ballPosition={cameraBallPosition}
           playerPositions={cameraPlayerPositions}
           goalkeeperPositions={cameraKeeperPositions}
+          activePlayerPosition={activePlayerState.position}
           replayFrame={replayFrame}
           isReplay={replayState.isPlaying}
           introProgress={introProgress}
@@ -2066,7 +2153,7 @@ function App() {
 
         <OrbitControls
           enablePan
-          enabled={gameState !== GAME_STATES.INTRO && !replayState.isPlaying}
+          enabled={gameState !== GAME_STATES.INTRO && freeRoamCameraEnabled}
           maxPolarAngle={Math.PI / 2}
           minPolarAngle={0}
           maxDistance={340}
@@ -2158,6 +2245,7 @@ function App() {
                 kickoffRef={kickoffRef}
                 externalBallCommand={externalBallCommand}
                 controlsEnabled={ballControlsEnabled}
+                mapMovementKeyToForce={mapMovementKeyToForce}
                 teamOnePlayers={TEAM_ONE_PLAYER_IDS.map((playerId) => ({
                   playerId,
                   position: playerStates[playerId]?.position || getPlayerProfile(playerId).startPosition,

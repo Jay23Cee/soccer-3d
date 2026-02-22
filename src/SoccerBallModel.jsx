@@ -42,12 +42,28 @@ function isShootKey(eventKey) {
   return typeof eventKey === "string" && eventKey.toLowerCase() === PLAYER_SHOOT_KEY;
 }
 
+function worldForceFromArrowKey(key, magnitude) {
+  switch (key) {
+    case "ArrowUp":
+      return [0, 0, -magnitude];
+    case "ArrowDown":
+      return [0, 0, magnitude];
+    case "ArrowLeft":
+      return [-magnitude, 0, 0];
+    case "ArrowRight":
+      return [magnitude, 0, 0];
+    default:
+      return [0, 0, 0];
+  }
+}
+
 function SoccerBallModel({
   scale,
   resetRef,
   kickoffRef,
   externalBallCommand,
   controlsEnabled,
+  mapMovementKeyToForce,
   teamOnePlayers = [],
   playerControlsEnabled = false,
   passCommand,
@@ -385,25 +401,21 @@ function SoccerBallModel({
         return;
       }
 
-      switch (event.key) {
-        case "ArrowUp":
-          event.preventDefault();
-          directionRef.current = [0, 0, -directionalForce];
-          break;
-        case "ArrowDown":
-          event.preventDefault();
-          directionRef.current = [0, 0, directionalForce];
-          break;
-        case "ArrowLeft":
-          event.preventDefault();
-          directionRef.current = [-directionalForce, 0, 0];
-          break;
-        case "ArrowRight":
-          event.preventDefault();
-          directionRef.current = [directionalForce, 0, 0];
-          break;
-        default:
-          break;
+      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+        event.preventDefault();
+        const mappedForce =
+          typeof mapMovementKeyToForce === "function"
+            ? mapMovementKeyToForce(event.key, directionalForce)
+            : null;
+
+        if (Array.isArray(mappedForce) && mappedForce.length >= 3) {
+          const nextX = Number.isFinite(mappedForce[0]) ? mappedForce[0] : 0;
+          const nextZ = Number.isFinite(mappedForce[2]) ? mappedForce[2] : 0;
+          directionRef.current = [nextX, 0, nextZ];
+          return;
+        }
+
+        directionRef.current = worldForceFromArrowKey(event.key, directionalForce);
       }
     };
 
@@ -420,7 +432,7 @@ function SoccerBallModel({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [api, controlsEnabled, onShotEvent, shotPowerMultiplier, speedMultiplier]);
+  }, [api, controlsEnabled, mapMovementKeyToForce, onShotEvent, shotPowerMultiplier, speedMultiplier]);
 
   useEffect(() => {
     if (!externalBallCommand || !externalBallCommand.id) {

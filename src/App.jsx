@@ -16,15 +16,16 @@ import SoccerPlayer from "./SoccerPlayer";
 import CameraDirector from "./camera/CameraDirector";
 import MatchStoryPanel from "./ui/MatchStoryPanel";
 import useGoalkeeperAI from "./hooks/useGoalkeeperAI";
-import useOpponentAI from "./hooks/useOpponentAI";
+import useOutfieldAI from "./hooks/useOutfieldAI";
 import usePowerPlay from "./hooks/usePowerPlay";
 import useReplayOrchestration from "./hooks/useReplayOrchestration";
 import { createReplayDirector } from "./replay/ReplayDirector";
 import {
-  createInitialOpponentState,
-  OPPONENT_STATES,
-  updateOpponentController,
-} from "./ai/opponentController";
+  createInitialOutfieldAiState,
+  deriveCpuPhaseLabel,
+  OUTFIELD_STATES,
+  updateOutfieldController,
+} from "./ai/outfieldController";
 import {
   createInitialGoalkeeperState,
   GOALKEEPER_STATES,
@@ -32,6 +33,7 @@ import {
 } from "./ai/goalkeeperController";
 import {
   AI_CONFIG,
+  BALL_CONFIG,
   BALL_RESET_DELAY_MS,
   CAMERA_CONFIG,
   COMBO_CONFIG,
@@ -39,15 +41,19 @@ import {
   GAME_STATES,
   GOAL_CONFIG,
   GOALKEEPER_CONFIG,
+  GOALKEEPER_PROFILES,
   GOAL_COOLDOWN_MS,
   INTRO_CONFIG,
+  KICKOFF_CONFIG,
   MATCH_STATS_CONFIG,
   MATCH_DURATION_SECONDS,
+  OUTFIELD_ROSTER,
   PLAYER_PASS_CONFIG,
   PLAYER_IDS,
   PLAYER_PROFILES,
   PLAYER_STAMINA_CONFIG,
   PLAYER_SWITCH_CONFIG,
+  TEAM_IDS,
   TEAM_ONE_PLAYER_IDS,
   TEAM_TWO_PLAYER_IDS,
   POWER_PLAY_CONFIG,
@@ -76,11 +82,6 @@ const TEAM_TWO = {
 const CONTROL_TARGETS = {
   PLAYER: "player",
   BALL: "ball",
-};
-
-const TEAM_IDS = {
-  TEAM_ONE: "teamOne",
-  TEAM_TWO: "teamTwo",
 };
 
 const TEAM_GOAL_TARGETS = {
@@ -212,11 +213,60 @@ function createInitialPlayerStates() {
   }, {});
 }
 
-function createInitialOpponentStates() {
-  return TEAM_TWO_PLAYER_IDS.reduce((accumulator, playerId) => {
-    accumulator[playerId] = createInitialOpponentState(getPlayerProfile(playerId).startPosition);
+function createInitialOutfieldAiStates() {
+  return OUTFIELD_ROSTER.reduce((accumulator, player) => {
+    accumulator[player.playerId] = createInitialOutfieldAiState(player.spawnPosition);
     return accumulator;
   }, {});
+}
+
+function createInitialGoalkeeperStates() {
+  return {
+    teamOne: createInitialGoalkeeperState(TEAM_IDS.TEAM_ONE),
+    teamTwo: createInitialGoalkeeperState(TEAM_IDS.TEAM_TWO),
+  };
+}
+
+function getOpposingTeamId(teamId) {
+  return teamId === TEAM_IDS.TEAM_ONE ? TEAM_IDS.TEAM_TWO : TEAM_IDS.TEAM_ONE;
+}
+
+function createKickoffRestartSetup(kickingTeamId) {
+  const playerStates = createInitialPlayerStates();
+  const teamPlayerIds =
+    kickingTeamId === TEAM_IDS.TEAM_ONE ? TEAM_ONE_PLAYER_IDS : TEAM_TWO_PLAYER_IDS;
+  const takerId = teamPlayerIds[0];
+  const receiverId = teamPlayerIds[1] || takerId;
+  const facingRotation = kickingTeamId === TEAM_IDS.TEAM_ONE ? [0, Math.PI, 0] : [0, 0, 0];
+  const receiverPosition = [
+    0,
+    0,
+    kickingTeamId === TEAM_IDS.TEAM_ONE
+      ? KICKOFF_CONFIG.RECEIVER_OFFSET_Z
+      : -KICKOFF_CONFIG.RECEIVER_OFFSET_Z,
+  ];
+
+  playerStates[takerId] = {
+    ...playerStates[takerId],
+    position: [...KICKOFF_CONFIG.SPOT_POSITION],
+    rotation: [...facingRotation],
+    sprintLocked: false,
+  };
+  playerStates[receiverId] = {
+    ...playerStates[receiverId],
+    position: [...receiverPosition],
+    rotation: [...facingRotation],
+    sprintLocked: false,
+  };
+
+  return {
+    teamId: kickingTeamId,
+    takerId,
+    receiverId,
+    playerStates,
+    spotPosition: [...KICKOFF_CONFIG.SPOT_POSITION],
+    receiverPosition,
+  };
 }
 
 function getNextTeamOnePlayerId(activePlayerId) {
@@ -226,6 +276,37 @@ function getNextTeamOnePlayerId(activePlayerId) {
   }
 
   return TEAM_ONE_PLAYER_IDS[(currentIndex + 1) % TEAM_ONE_PLAYER_IDS.length];
+}
+
+function getBestDefensivePlayerId(playerStates, ballSnapshot, currentActivePlayerId) {
+  if (!ballSnapshot?.position) {
+    return getNextTeamOnePlayerId(currentActivePlayerId);
+  }
+
+  const [ballX, , ballZ] = ballSnapshot.position;
+  const opponentDriveBiasZ = ballZ > 0 ? 1.15 : 1;
+
+  const scoredPlayers = TEAM_ONE_PLAYER_IDS.filter((playerId) => playerId !== currentActivePlayerId)
+    .map((playerId) => {
+      const playerState = playerStates[playerId];
+      if (!playerState) {
+        return null;
+      }
+
+      const distanceToBall = Math.hypot(
+        playerState.position[0] - ballX,
+        playerState.position[2] - ballZ
+      );
+      const directionOfPlayBias = Math.max(0, playerState.position[2]) * opponentDriveBiasZ;
+      const laneBias = Math.max(0, 20 - Math.abs(playerState.position[0] - ballX));
+      const score = distanceToBall * 0.68 - directionOfPlayBias * 0.06 - laneBias * 0.04;
+
+      return { playerId, score };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.score - right.score);
+
+  return scoredPlayers[0]?.playerId || getNextTeamOnePlayerId(currentActivePlayerId);
 }
 
 function clampStamina(playerId, value) {
@@ -348,6 +429,8 @@ function statusText(gameState) {
       return "In Play";
     case GAME_STATES.GOAL_SCORED:
       return "Goal Scored";
+    case GAME_STATES.KICKOFF:
+      return "Kickoff";
     case GAME_STATES.PAUSED:
       return "Paused";
     case GAME_STATES.ENDED:
@@ -359,6 +442,8 @@ function statusText(gameState) {
 
 function clockLabel(gameState) {
   switch (gameState) {
+    case GAME_STATES.KICKOFF:
+      return "Kickoff";
     case GAME_STATES.PAUSED:
       return "Paused";
     case GAME_STATES.ENDED:
@@ -557,7 +642,7 @@ function EndMatchScoreboard3D({ teamOneScore, teamTwoScore, teamOneName, teamTwo
 }
 
 function App() {
-  const [difficulty] = useState(AI_CONFIG.DEFAULT_DIFFICULTY);
+  const [difficulty, setDifficulty] = useState(AI_CONFIG.DEFAULT_DIFFICULTY);
   const [ballScale, setBallScale] = useState(1);
   const [teamOneScore, setTeamOneScore] = useState(0);
   const [teamTwoScore, setTeamTwoScore] = useState(0);
@@ -582,19 +667,15 @@ function App() {
   const [cameraNudge, setCameraNudge] = useState([0, 0, 0]);
   const [qualityMode, setQualityMode] = useState(() => detectQualityMode());
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
-  const [opponentAiStates, setOpponentAiStates] = useState(() => createInitialOpponentStates());
-  const [goalkeeperState, setGoalkeeperState] = useState(() => ({
-    teamOne: createInitialGoalkeeperState(TEAM_IDS.TEAM_ONE),
-    teamTwo: createInitialGoalkeeperState(TEAM_IDS.TEAM_TWO),
-  }));
+  const [outfieldAiStates, setOutfieldAiStates] = useState(() => createInitialOutfieldAiStates());
+  const [goalkeeperState, setGoalkeeperState] = useState(() => createInitialGoalkeeperStates());
   const [, setCameraState] = useState(() => createInitialCameraState());
   const [replayState, setReplayState] = useState(() => createInitialReplayState());
   const [replayFrame, setReplayFrame] = useState(null);
   const [matchStats, setMatchStats] = useState(() => createInitialMatchStats());
   const [eventTimeline, setEventTimeline] = useState([]);
   const [ballSnapshot, setBallSnapshot] = useState(null);
-  const [externalBallCommand, setExternalBallCommand] = useState(null);
-  const [passCommand, setPassCommand] = useState(null);
+  const [ballActionCommand, setBallActionCommand] = useState(null);
   const [possessionState, setPossessionState] = useState(null);
 
   const ballResetRef = useRef(null);
@@ -623,6 +704,11 @@ function App() {
   const aiLastUpdateAtRef = useRef(0);
   const goalkeeperLastUpdateAtRef = useRef(0);
   const lastPossessionTickAtRef = useRef(0);
+  const pendingGoalReplayResetRef = useRef(null);
+  const pendingControlTransferRef = useRef(null);
+  const pendingKickoffRef = useRef(null);
+  const kickoffCommandTimeoutRef = useRef(null);
+  const lastKickoffRef = useRef(null);
   const playerInputRef = useRef({
     ArrowUp: false,
     ArrowDown: false,
@@ -685,25 +771,41 @@ function App() {
     : playerControlsEnabled && !activePlayerState.sprintLocked && isSprintHeld
       ? "run"
       : "track";
-  const getOpponentAnimationState = useCallback((opponentAiState) => {
-    if (!opponentAiState) {
+  const getOutfieldAnimationState = useCallback((outfieldAiState) => {
+    if (!outfieldAiState) {
       return "idle";
     }
-    if (opponentAiState.mode === OPPONENT_STATES.SHOOT) {
+    if (outfieldAiState.mode === OUTFIELD_STATES.SHOOT) {
       return "shoot";
     }
-    if (opponentAiState.mode === OPPONENT_STATES.INTERCEPT) {
+    if (outfieldAiState.mode === OUTFIELD_STATES.PRESS) {
       return "intercept";
     }
-    if (opponentAiState.mode === OPPONENT_STATES.TRACK) {
+    if (
+      outfieldAiState.mode === OUTFIELD_STATES.CARRY ||
+      outfieldAiState.mode === OUTFIELD_STATES.SUPPORT ||
+      outfieldAiState.mode === OUTFIELD_STATES.RECEIVE
+    ) {
       return "track";
     }
-    if (opponentAiState.mode === OPPONENT_STATES.RECOVER) {
+    if (outfieldAiState.mode === OUTFIELD_STATES.RECOVER) {
       return "track";
     }
     return "idle";
   }, []);
-  const primaryOpponentAiState = opponentAiStates[TEAM_TWO_PLAYER_IDS[0]] || createInitialOpponentState();
+  const primaryOpponentAiState =
+    outfieldAiStates[TEAM_TWO_PLAYER_IDS[0]] ||
+    createInitialOutfieldAiState(getPlayerProfile(TEAM_TWO_PLAYER_IDS[0]).spawnPosition);
+  const cpuPhaseLabel = deriveCpuPhaseLabel({
+    teamId: TEAM_IDS.TEAM_TWO,
+    possessionState,
+    aiStates: TEAM_TWO_PLAYER_IDS.map((playerId) => outfieldAiStates[playerId]),
+  });
+  const possessionOwnerLabel = possessionState
+    ? possessionState.teamId === TEAM_IDS.TEAM_ONE
+      ? getPlayerProfile(possessionState.playerId).label
+      : getPlayerProfile(possessionState.playerId).label
+    : "Loose Ball";
   const keeperOneAnimationState =
     goalkeeperState.teamOne.mode === GOALKEEPER_STATES.DISTRIBUTE
       ? "distribute"
@@ -732,6 +834,25 @@ function App() {
   const shotPowerMultiplier = boostShotPowerMultiplier * activeKickMultiplierFromStamina;
   const controlAssistMultiplier =
     (activeBoostConfig?.controlAssistMultiplier || 1) * appliedComboMultiplier;
+  const outfieldRoster = useMemo(() => OUTFIELD_ROSTER, []);
+  const ballActors = useMemo(
+    () => [
+      ...outfieldRoster.map((player) => ({
+        ...player,
+        position: playerStates[player.playerId]?.position || player.spawnPosition,
+        rotation: playerStates[player.playerId]?.rotation || player.spawnRotation,
+      })),
+      ...Object.values(GOALKEEPER_PROFILES).map((keeperProfile) => {
+        const keeperState = goalkeeperState[keeperProfile.teamId];
+        return {
+          ...keeperProfile,
+          position: keeperState?.position || keeperProfile.spawnPosition,
+          rotation: keeperState?.rotation || keeperProfile.spawnRotation,
+        };
+      }),
+    ],
+    [goalkeeperState, outfieldRoster, playerStates]
+  );
   const canvasDpr = qualityMode === "mobile" ? [1, 1.2] : [1, 1.5];
   const shadowMapSize = qualityMode === "mobile" ? 512 : 1024;
   const replayBallPosition = replayFrame?.ball?.position || null;
@@ -928,9 +1049,103 @@ function App() {
     setIsSprintHeld(false);
     setActivePlayerId(TEAM_ONE_PLAYER_IDS[0]);
     setPlayerStates(createInitialPlayerStates());
+    pendingControlTransferRef.current = null;
     lastPlayerSwitchAtRef.current = 0;
     passCooldownUntilRef.current = 0;
   }, [clearPlayerInput]);
+
+  const clearKickoffSequence = useCallback(() => {
+    if (kickoffCommandTimeoutRef.current) {
+      clearTimeout(kickoffCommandTimeoutRef.current);
+      kickoffCommandTimeoutRef.current = null;
+    }
+
+    pendingKickoffRef.current = null;
+  }, []);
+
+  const resetFieldForKickoff = useCallback((kickingTeamId) => {
+    const kickoffSetup = createKickoffRestartSetup(kickingTeamId);
+    resetPlayers();
+    setPlayerStates(kickoffSetup.playerStates);
+    setOutfieldAiStates(createInitialOutfieldAiStates());
+    setGoalkeeperState(createInitialGoalkeeperStates());
+    setBallActionCommand(null);
+    setPossessionState(null);
+    aiLastUpdateAtRef.current = 0;
+    goalkeeperLastUpdateAtRef.current = 0;
+    return kickoffSetup;
+  }, [resetPlayers]);
+
+  const startKickoffRestart = useCallback(
+    (kickingTeamId, delayMs = 0) => {
+      clearKickoffSequence();
+      const kickoffSetup = resetFieldForKickoff(kickingTeamId);
+      const kickoffSequenceId = `kickoff-seq-${kickoffSetup.takerId}-${Math.round(nowMs())}`;
+      lastKickoffRef.current = {
+        id: kickoffSequenceId,
+        commandId: null,
+        teamId: kickoffSetup.teamId,
+        takerId: kickoffSetup.takerId,
+        receiverId: kickoffSetup.receiverId,
+        status: delayMs > 0 ? "staged" : "arming",
+      };
+      setGameState((current) =>
+        current === GAME_STATES.ENDED ? GAME_STATES.ENDED : GAME_STATES.KICKOFF
+      );
+
+      const launchKickoff = () => {
+        const kickoffHandle = kickoffRef.current;
+        if (!kickoffHandle) {
+          lastKickoffRef.current = lastKickoffRef.current
+            ? { ...lastKickoffRef.current, status: "failed" }
+            : null;
+          safeResetBall();
+          setGameState((current) =>
+            current === GAME_STATES.ENDED ? GAME_STATES.ENDED : GAME_STATES.IN_PLAY
+          );
+          return;
+        }
+
+        const commandId = `kickoff-${kickoffSetup.takerId}-${kickoffSetup.receiverId}-${Math.round(
+          nowMs()
+        )}`;
+        pendingKickoffRef.current = {
+          commandId,
+          kickoffId: kickoffSequenceId,
+          teamId: kickoffSetup.teamId,
+        };
+        lastKickoffRef.current = lastKickoffRef.current
+          ? { ...lastKickoffRef.current, commandId, status: "launched" }
+          : null;
+        kickoffHandle({
+          id: `setup-${commandId}`,
+          teamId: kickoffSetup.teamId,
+          takerId: kickoffSetup.takerId,
+          spotPosition: kickoffSetup.spotPosition,
+        });
+        setBallActionCommand({
+          id: commandId,
+          actorId: kickoffSetup.takerId,
+          teamId: kickoffSetup.teamId,
+          type: "pass",
+          targetPlayerId: kickoffSetup.receiverId,
+          targetPosition: kickoffSetup.receiverPosition,
+          power: PLAYER_PASS_CONFIG.PASS_SPEED / BALL_CONFIG.FORCE,
+        });
+      };
+
+      if (delayMs > 0) {
+        kickoffCommandTimeoutRef.current = setTimeout(() => {
+          kickoffCommandTimeoutRef.current = null;
+          launchKickoff();
+        }, delayMs);
+        return;
+      }
+
+      launchKickoff();
+    },
+    [clearKickoffSequence, resetFieldForKickoff, safeResetBall]
+  );
 
   const spawnPowerZone = useCallback(() => {
     const type = pickRandom(Object.keys(POWER_PLAY_CONFIG.TYPES));
@@ -958,11 +1173,13 @@ function App() {
     clearIntroTimers();
     clearPowerPlayTimers();
     clearComboState();
+    clearKickoffSequence();
     if (goalResetTimeoutRef.current) {
       clearTimeout(goalResetTimeoutRef.current);
       goalResetTimeoutRef.current = null;
     }
 
+    pendingGoalReplayResetRef.current = null;
     goalCooldownUntilRef.current = 0;
     setTeamOneScore(0);
     setTeamTwoScore(0);
@@ -973,11 +1190,8 @@ function App() {
     setMatchEvent(null);
     setEventTimeline([]);
     setShotMeterState(createShotMeterState());
-    setOpponentAiStates(createInitialOpponentStates());
-    setGoalkeeperState({
-      teamOne: createInitialGoalkeeperState(TEAM_IDS.TEAM_ONE),
-      teamTwo: createInitialGoalkeeperState(TEAM_IDS.TEAM_TWO),
-    });
+    setOutfieldAiStates(createInitialOutfieldAiStates());
+    setGoalkeeperState(createInitialGoalkeeperStates());
     setMatchStats(createInitialMatchStats());
     const initialCameraState = createInitialCameraState();
     cameraTelemetryRef.current = initialCameraState;
@@ -987,8 +1201,7 @@ function App() {
     setReplayState(createInitialReplayState());
     setReplayFrame(null);
     setBallSnapshot(null);
-    setExternalBallCommand(null);
-    setPassCommand(null);
+    setBallActionCommand(null);
     setPossessionState(null);
     setIntroProgress(0);
     setGameState(GAME_STATES.INTRO);
@@ -1014,15 +1227,16 @@ function App() {
     introTimeoutRef.current = setTimeout(() => {
       clearIntroTimers();
       setIntroProgress(1);
-      setGameState(GAME_STATES.IN_PLAY);
-      kickoffRef.current?.();
+      startKickoffRestart(TEAM_IDS.TEAM_ONE);
     }, INTRO_CONFIG.DURATION_MS);
   }, [
     clearComboState,
     clearIntroTimers,
+    clearKickoffSequence,
     clearPowerPlayTimers,
     resetPlayers,
     safeResetBall,
+    startKickoffRestart,
   ]);
 
   const skipIntro = useCallback(() => {
@@ -1032,9 +1246,8 @@ function App() {
 
     clearIntroTimers();
     setIntroProgress(1);
-    setGameState(GAME_STATES.IN_PLAY);
-    kickoffRef.current?.();
-  }, [clearIntroTimers, gameState]);
+    startKickoffRestart(TEAM_IDS.TEAM_ONE);
+  }, [clearIntroTimers, gameState, startKickoffRestart]);
 
   const togglePause = useCallback(() => {
     setGameState((current) => {
@@ -1186,6 +1399,7 @@ function App() {
       goalCooldownUntilRef.current = now + GOAL_COOLDOWN_MS;
       setGameState(GAME_STATES.GOAL_SCORED);
       const scoringTeamId = goalId === "teamOne" ? TEAM_IDS.TEAM_ONE : TEAM_IDS.TEAM_TWO;
+      const kickoffTeamId = getOpposingTeamId(scoringTeamId);
 
       if (scoringTeamId === TEAM_IDS.TEAM_ONE) {
         setTeamOneScore((prev) => prev + 1);
@@ -1200,7 +1414,7 @@ function App() {
         id: telemetryEvent.id,
       });
       updateMomentum(scoringTeamId, MATCH_STATS_CONFIG.MOMENTUM_GOAL_SWING);
-      replayDirectorRef.current.armReplay(
+      const replayArmed = replayDirectorRef.current.armReplay(
         {
           type: "goal",
           id: telemetryEvent.id,
@@ -1212,25 +1426,41 @@ function App() {
 
       if (goalResetTimeoutRef.current) {
         clearTimeout(goalResetTimeoutRef.current);
+        goalResetTimeoutRef.current = null;
       }
 
+      if (replayArmed) {
+        pendingGoalReplayResetRef.current = {
+          eventId: telemetryEvent.id,
+          kickoffTeamId,
+          playbackStarted: false,
+        };
+        return;
+      }
+
+      pendingGoalReplayResetRef.current = null;
       goalResetTimeoutRef.current = setTimeout(() => {
-        safeResetBall();
-        setGameState((current) =>
-          current === GAME_STATES.ENDED ? GAME_STATES.ENDED : GAME_STATES.IN_PLAY
-        );
+        startKickoffRestart(kickoffTeamId);
+        goalResetTimeoutRef.current = null;
       }, BALL_RESET_DELAY_MS);
     },
-    [canScore, emitTelemetryEvent, safeResetBall, triggerCameraNudge, triggerOverlayPulse, updateMomentum]
+    [
+      canScore,
+      emitTelemetryEvent,
+      startKickoffRestart,
+      triggerCameraNudge,
+      triggerOverlayPulse,
+      updateMomentum,
+    ]
   );
 
   const handleOutOfBounds = useCallback(() => {
-    if (gameState === GAME_STATES.IDLE || gameState === GAME_STATES.ENDED) {
+    if (gameState !== GAME_STATES.IN_PLAY || replayActive) {
       return;
     }
 
     safeResetBall();
-  }, [gameState, safeResetBall]);
+  }, [gameState, replayActive, safeResetBall]);
 
   const handleShotChargeChange = useCallback((nextState) => {
     setShotMeterState(createShotMeterState(nextState));
@@ -1300,9 +1530,41 @@ function App() {
     [emitTelemetryEvent]
   );
 
-  const handlePassCommandConsumed = useCallback((commandId) => {
-    setPassCommand((current) => (current?.id === commandId ? null : current));
-  }, []);
+  const handleBallActionResolved = useCallback((resolution) => {
+    setBallActionCommand((current) => (current?.id === resolution?.id ? null : current));
+    if (
+      resolution?.accepted &&
+      resolution.type === "pass" &&
+      resolution.targetPlayerId &&
+      pendingControlTransferRef.current?.commandId === resolution.id
+    ) {
+      setActivePlayerId(resolution.targetPlayerId);
+      lastPlayerSwitchAtRef.current = nowMs();
+    }
+
+    if (pendingControlTransferRef.current?.commandId === resolution?.id) {
+      pendingControlTransferRef.current = null;
+    }
+
+    if (pendingKickoffRef.current?.commandId === resolution?.id) {
+      lastKickoffRef.current =
+        lastKickoffRef.current &&
+        lastKickoffRef.current.id === pendingKickoffRef.current.kickoffId
+          ? {
+              ...lastKickoffRef.current,
+              commandId: resolution.id,
+              status: resolution.accepted ? "completed" : "failed",
+            }
+          : lastKickoffRef.current;
+      pendingKickoffRef.current = null;
+      if (!resolution?.accepted) {
+        safeResetBall();
+      }
+      setGameState((current) =>
+        current === GAME_STATES.ENDED ? GAME_STATES.ENDED : GAME_STATES.IN_PLAY
+      );
+    }
+  }, [safeResetBall]);
 
   const triggerPass = useCallback(() => {
     if (
@@ -1329,36 +1591,21 @@ function App() {
       return;
     }
 
-    const [fromX, , fromZ] = passerState.position;
-    const [toX, , toZ] = receiverState.position;
-    let directionX = toX - fromX;
-    let directionZ = toZ - fromZ;
-    const distance = Math.hypot(directionX, directionZ);
-    if (distance > 0.0001) {
-      directionX /= distance;
-      directionZ /= distance;
-    } else {
-      const yaw = Number.isFinite(passerState.rotation?.[1]) ? passerState.rotation[1] : 0;
-      directionX = Math.sin(yaw);
-      directionZ = Math.cos(yaw);
-    }
-
-    const velocity = [
-      directionX * PLAYER_PASS_CONFIG.PASS_SPEED,
-      PLAYER_PASS_CONFIG.PASS_LOFT,
-      directionZ * PLAYER_PASS_CONFIG.PASS_SPEED,
-    ];
     const commandId = `pass-${activePlayerId}-${receiverId}-${Math.round(now)}`;
-    setPassCommand({
+    pendingControlTransferRef.current = {
+      commandId,
+      receiverId,
+    };
+    setBallActionCommand({
       id: commandId,
-      fromPlayerId: activePlayerId,
-      toPlayerId: receiverId,
-      velocity,
-      issuedAtMs: now,
+      actorId: activePlayerId,
+      teamId: TEAM_IDS.TEAM_ONE,
+      type: "pass",
+      targetPlayerId: receiverId,
+      targetPosition: [...receiverState.position],
+      power: PLAYER_PASS_CONFIG.PASS_SPEED / BALL_CONFIG.FORCE,
     });
-    setActivePlayerId(receiverId);
     passCooldownUntilRef.current = now + PLAYER_PASS_CONFIG.COOLDOWN_MS;
-    lastPlayerSwitchAtRef.current = now;
   }, [
     activePlayerId,
     playerControlsEnabled,
@@ -1498,6 +1745,80 @@ function App() {
   });
 
   useEffect(() => {
+    const pendingReplayReset = pendingGoalReplayResetRef.current;
+    if (!pendingReplayReset) {
+      return;
+    }
+
+    const isMatchingReplay = replayState.eventId === pendingReplayReset.eventId;
+    if (replayState.isPlaying && isMatchingReplay) {
+      pendingReplayReset.playbackStarted = true;
+      return;
+    }
+
+    const replayFinished =
+      pendingReplayReset.playbackStarted &&
+      !replayState.isPlaying &&
+      (isMatchingReplay ||
+        replayState.mode === REPLAY_CONFIG.STATE.COOLDOWN ||
+        replayState.mode === REPLAY_CONFIG.STATE.IDLE);
+    const replayFailedToStart = isMatchingReplay && replayState.mode === REPLAY_CONFIG.STATE.IDLE;
+    if (!replayFinished && !replayFailedToStart) {
+      return;
+    }
+
+    pendingGoalReplayResetRef.current = null;
+    if (goalResetTimeoutRef.current) {
+      clearTimeout(goalResetTimeoutRef.current);
+      goalResetTimeoutRef.current = null;
+    }
+
+    startKickoffRestart(pendingReplayReset.kickoffTeamId, KICKOFF_CONFIG.POST_GOAL_DELAY_MS);
+  }, [
+    replayState.eventId,
+    replayState.isPlaying,
+    replayState.mode,
+    startKickoffRestart,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || window.__SOCCER_E2E__ !== true) {
+      return undefined;
+    }
+
+    window.__SOCCER_TEST_API__ = {
+      triggerGoal: (goalId) => {
+        handleGoal(goalId);
+      },
+      getSnapshot: () => ({
+        gameState,
+        replayState: {
+          ...replayState,
+        },
+        score: {
+          teamOne: teamOneScore,
+          teamTwo: teamTwoScore,
+        },
+        activePlayerId,
+        lastKickoff: lastKickoffRef.current ? { ...lastKickoffRef.current } : null,
+        playerStates: PLAYER_IDS.reduce((result, playerId) => {
+          const profile = getPlayerProfile(playerId);
+          const state = playerStates[playerId];
+          result[playerId] = {
+            position: [...(state?.position || profile.startPosition)],
+            rotation: [...(state?.rotation || profile.startRotation)],
+          };
+          return result;
+        }, {}),
+      }),
+    };
+
+    return () => {
+      delete window.__SOCCER_TEST_API__;
+    };
+  }, [activePlayerId, gameState, handleGoal, playerStates, replayState, teamOneScore, teamTwoScore]);
+
+  useEffect(() => {
     if (gameState !== GAME_STATES.IN_PLAY || replayActive) {
       return undefined;
     }
@@ -1535,21 +1856,20 @@ function App() {
     return () => clearInterval(timer);
   }, [gameState, possessionState?.teamId, replayActive]);
 
-  useOpponentAI({
+  useOutfieldAI({
     enabled: gameState === GAME_STATES.IN_PLAY && !replayActive,
     ballSnapshot,
+    possessionState,
     difficulty,
     aiConfig: AI_CONFIG,
-    teamOnePlayerIds: TEAM_ONE_PLAYER_IDS,
-    teamTwoPlayerIds: TEAM_TWO_PLAYER_IDS,
-    teamIds: TEAM_IDS,
+    roster: outfieldRoster,
+    activePlayerId,
     teamGoalTargets: TEAM_GOAL_TARGETS,
-    createInitialOpponentState,
-    getPlayerProfile,
-    updateOpponentController,
+    createInitialOutfieldAiState,
+    updateOutfieldController,
     setPlayerStates,
-    setOpponentAiStates,
-    setExternalBallCommand,
+    setOutfieldAiStates,
+    setBallActionCommand,
     aiLastUpdateAtRef,
     nowMs,
   });
@@ -1561,7 +1881,7 @@ function App() {
     goalkeeperConfig: GOALKEEPER_CONFIG,
     updateGoalkeeperController,
     setGoalkeeperState,
-    setExternalBallCommand,
+    setBallActionCommand,
     goalkeeperLastUpdateAtRef,
     nowMs,
   });
@@ -1579,6 +1899,17 @@ function App() {
     setBoostTimeLeftMs,
     nowMs,
   });
+
+  useEffect(() => {
+    if (
+      possessionState?.teamId === TEAM_IDS.TEAM_ONE &&
+      possessionState.playerId &&
+      possessionState.playerId !== activePlayerId
+    ) {
+      setActivePlayerId(possessionState.playerId);
+      lastPlayerSwitchAtRef.current = nowMs();
+    }
+  }, [activePlayerId, possessionState?.playerId, possessionState?.teamId]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1774,7 +2105,7 @@ function App() {
         if (now - lastPlayerSwitchAtRef.current < PLAYER_SWITCH_CONFIG.COOLDOWN_MS) {
           return;
         }
-        setActivePlayerId((current) => getNextTeamOnePlayerId(current));
+        setActivePlayerId((current) => getBestDefensivePlayerId(playerStates, ballSnapshot, current));
         lastPlayerSwitchAtRef.current = now;
         return;
       }
@@ -1835,8 +2166,10 @@ function App() {
       window.removeEventListener("blur", handleWindowBlur);
     };
   }, [
+    ballSnapshot,
     clearPlayerInput,
     playerControlsEnabled,
+    playerStates,
     possessionState?.teamId,
     replayState.canSkip,
     triggerPass,
@@ -1871,11 +2204,12 @@ function App() {
         clearTimeout(cameraNudgeTimeoutRef.current);
       }
 
+      clearKickoffSequence();
       clearIntroTimers();
       clearPowerPlayTimers();
       clearPlayerInput();
     };
-  }, [clearIntroTimers, clearPlayerInput, clearPowerPlayTimers]);
+  }, [clearIntroTimers, clearKickoffSequence, clearPlayerInput, clearPowerPlayTimers]);
 
   return (
     <div
@@ -1915,6 +2249,14 @@ function App() {
           <strong>{activeProfile.label}</strong>
           <span>{activePlayerStrength}</span>
           <span className="active-player-speed">{activeMovementSpeed.toFixed(1)} SPD</span>
+        </p>
+
+        <p className="boost-label" data-testid="hud-possession-owner">
+          Possession: {possessionState ? possessionOwnerLabel : "Loose Ball"}
+        </p>
+
+        <p className="combo-label" data-testid="hud-cpu-phase">
+          CPU Phase: {cpuPhaseLabel}
         </p>
 
         <p className={`boost-label ${activeBoost ? "is-active" : ""}`}>
@@ -2000,6 +2342,23 @@ function App() {
             aria-label="Ball Size"
             onChange={(event) => setBallScale(parseFloat(event.target.value))}
           />
+        </label>
+
+        <label className="slider-wrap camera-pov-wrap">
+          <span className="slider-row">
+            <span>Difficulty</span>
+            <strong className="slider-value">{difficulty}</strong>
+          </span>
+          <select
+            className="camera-pov-select"
+            aria-label="Difficulty"
+            value={difficulty}
+            onChange={(event) => setDifficulty(event.target.value)}
+          >
+            <option value="easy">easy</option>
+            <option value="normal">normal</option>
+            <option value="hard">hard</option>
+          </select>
         </label>
 
         <label className="slider-wrap camera-pov-wrap">
@@ -2116,6 +2475,8 @@ function App() {
           replayState={replayState}
           aiState={primaryOpponentAiState}
           difficulty={difficulty}
+          possessionOwnerLabel={possessionOwnerLabel}
+          cpuPhaseLabel={cpuPhaseLabel}
         />
       </div>
 
@@ -2135,6 +2496,7 @@ function App() {
           activePlayerPosition={activePlayerState.position}
           replayFrame={replayFrame}
           isReplay={replayState.isPlaying}
+          replayEventType={replayState.eventType}
           introProgress={introProgress}
           gameState={gameState}
           cameraNudge={cameraNudge}
@@ -2174,19 +2536,24 @@ function App() {
               const renderedPosition = replayPlayer?.position || playerState.position;
               const renderedRotation = replayPlayer?.rotation || playerState.rotation;
               const isTeamOnePlayer = TEAM_ONE_PLAYER_IDS.includes(playerId);
-              const opponentAiState = opponentAiStates[playerId];
+              const outfieldAiState = outfieldAiStates[playerId];
               const animationState = isTeamOnePlayer
                 ? playerId === activePlayerId
                   ? playerOneAnimationState
-                  : "track"
-                : getOpponentAnimationState(opponentAiState);
+                  : getOutfieldAnimationState(outfieldAiState)
+                : getOutfieldAnimationState(outfieldAiState);
               const animationBlend = isTeamOnePlayer
                 ? playerId === activePlayerId && playerControlsEnabled && isSprintHeld
                   ? 1
-                  : 0.35
-                : opponentAiState?.mode === OPPONENT_STATES.INTERCEPT
+                  : outfieldAiState?.mode === OUTFIELD_STATES.RECEIVE ||
+                      outfieldAiState?.mode === OUTFIELD_STATES.SUPPORT
+                    ? 0.65
+                    : 0.2
+                : outfieldAiState?.mode === OUTFIELD_STATES.PRESS
                   ? 0.9
-                  : opponentAiState?.mode === OPPONENT_STATES.TRACK
+                  : outfieldAiState?.mode === OUTFIELD_STATES.CARRY ||
+                      outfieldAiState?.mode === OUTFIELD_STATES.SUPPORT ||
+                      outfieldAiState?.mode === OUTFIELD_STATES.RECEIVE
                     ? 0.7
                     : 0.2;
 
@@ -2243,17 +2610,14 @@ function App() {
                 scale={ballScale}
                 resetRef={ballResetRef}
                 kickoffRef={kickoffRef}
-                externalBallCommand={externalBallCommand}
+                ballActionCommand={ballActionCommand}
+                onBallActionResolved={handleBallActionResolved}
                 controlsEnabled={ballControlsEnabled}
                 mapMovementKeyToForce={mapMovementKeyToForce}
-                teamOnePlayers={TEAM_ONE_PLAYER_IDS.map((playerId) => ({
-                  playerId,
-                  position: playerStates[playerId]?.position || getPlayerProfile(playerId).startPosition,
-                  rotation: playerStates[playerId]?.rotation || getPlayerProfile(playerId).startRotation,
-                }))}
+                players={ballActors}
+                controlledPlayerId={activePlayerId}
+                controlledTeamId={TEAM_IDS.TEAM_ONE}
                 playerControlsEnabled={playerControlsEnabled}
-                passCommand={passCommand}
-                onPassCommandConsumed={handlePassCommandConsumed}
                 onOutOfBounds={handleOutOfBounds}
                 activePowerZone={activePowerZone}
                 onPowerZoneEnter={handlePowerZoneEnter}

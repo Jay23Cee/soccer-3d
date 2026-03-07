@@ -3,6 +3,7 @@ import {
   FIELD_CONFIG,
   GOALKEEPER_CONFIG,
   AI_CONFIG,
+  GOALKEEPER_PROFILES,
 } from "../config/gameConfig";
 
 export const GOALKEEPER_STATES = {
@@ -39,16 +40,23 @@ function difficultyConfig(difficulty) {
 }
 
 function homePositionForTeam(teamId) {
+  const profile = GOALKEEPER_PROFILES[teamId];
+  if (profile?.spawnPosition) {
+    return [...profile.spawnPosition];
+  }
+
   const z = teamId === "teamOne" ? -GOALKEEPER_CONFIG.HOME_DEPTH : GOALKEEPER_CONFIG.HOME_DEPTH;
   return [0, 0, z];
 }
 
 export function createInitialGoalkeeperState(teamId) {
+  const profile = GOALKEEPER_PROFILES[teamId] || null;
   return {
     teamId,
+    playerId: profile?.playerId || `keeper-${teamId}`,
     mode: GOALKEEPER_STATES.IDLE,
     position: homePositionForTeam(teamId),
-    rotation: [0, teamId === "teamOne" ? 0 : Math.PI, 0],
+    rotation: profile?.spawnRotation || [0, teamId === "teamOne" ? 0 : Math.PI, 0],
     saveCooldownUntilMs: 0,
     distributeUntilMs: 0,
   };

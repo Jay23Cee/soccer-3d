@@ -27,6 +27,8 @@ function MatchStoryPanel({
   replayState,
   aiState,
   difficulty,
+  possessionOwnerLabel,
+  cpuPhaseLabel,
 }) {
   const teamOnePossession = Math.round((matchStats?.possession?.teamOne || 0) * 100);
   const teamTwoPossession = 100 - teamOnePossession;
@@ -68,8 +70,16 @@ function MatchStoryPanel({
         </p>
       </div>
 
+      <p className="story-ai-state" data-testid="possession-owner">
+        Possession: <strong>{possessionOwnerLabel || "Loose Ball"}</strong>
+      </p>
+
       <p className="story-ai-state" data-testid="ai-state">
         Opponent: <strong>{aiState?.mode || "idle"}</strong>
+      </p>
+
+      <p className="story-ai-state" data-testid="cpu-phase">
+        CPU Phase: <strong>{cpuPhaseLabel || "recover"}</strong>
       </p>
 
       <p className="story-replay" data-testid="replay-state">

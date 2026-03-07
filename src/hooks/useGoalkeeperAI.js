@@ -7,7 +7,7 @@ export default function useGoalkeeperAI({
   goalkeeperConfig,
   updateGoalkeeperController,
   setGoalkeeperState,
-  setExternalBallCommand,
+  setBallActionCommand,
   goalkeeperLastUpdateAtRef,
   nowMs,
 }) {
@@ -51,18 +51,21 @@ export default function useGoalkeeperAI({
             : null;
 
         if (saveKeeper?.distributeImpulse) {
-          setExternalBallCommand({
-            id: `keeper-save-${saveKeeper.teamId}-${now}`,
-            type: "velocity",
-            vector: saveKeeper.distributeImpulse.map((value, index) =>
-              index === 1 ? value * 10 : value
-            ),
-            event: {
-              type: "save",
+          setBallActionCommand((currentCommand) =>
+            currentCommand || {
+              id: `keeper-save-${saveKeeper.teamId}-${now}`,
+              actorId: saveKeeper.playerId,
               teamId: saveKeeper.teamId,
-              releasedAtMs: now,
-            },
-          });
+              type: "clear",
+              targetPlayerId: null,
+              targetPosition: [
+                saveKeeper.teamId === "teamOne" ? 0 : 0,
+                0,
+                saveKeeper.teamId === "teamOne" ? -18 : 18,
+              ],
+              power: 1.15,
+            }
+          );
         }
 
         return {
@@ -80,7 +83,7 @@ export default function useGoalkeeperAI({
     goalkeeperConfig.UPDATE_INTERVAL_MS,
     goalkeeperLastUpdateAtRef,
     nowMs,
-    setExternalBallCommand,
+    setBallActionCommand,
     setGoalkeeperState,
     updateGoalkeeperController,
   ]);

@@ -375,9 +375,17 @@
 .overlay {
   position: absolute;
   top: 6.4rem;
+  bottom: 1rem;
   left: 1rem;
   z-index: 20;
   width: min(340px, calc(100vw - 2rem));
+  overflow-y: scroll;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(125, 211, 252, 0.56) rgba(8, 20, 30, 0.44);
   background:
     radial-gradient(circle at 8% -20%, rgba(56, 189, 248, 0.2), transparent 45%),
     linear-gradient(145deg, var(--panel-bg), var(--panel-bg-soft));
@@ -388,6 +396,26 @@
   box-shadow:
     0 18px 34px rgba(3, 7, 12, 0.42),
     0 0 0 1px rgba(56, 189, 248, 0.16) inset;
+}
+
+.overlay::-webkit-scrollbar {
+  width: 0.78rem;
+}
+
+.overlay::-webkit-scrollbar-track {
+  margin: 0.3rem 0;
+  border-radius: 999px;
+  background: rgba(8, 20, 30, 0.44);
+}
+
+.overlay::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(8, 20, 30, 0.72);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.74), rgba(34, 197, 94, 0.74));
+}
+
+.overlay::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(103, 232, 249, 0.88), rgba(74, 222, 128, 0.84));
 }
 
 .overlay.pulse-goal {
@@ -997,6 +1025,7 @@
   .overlay {
     left: 0.5rem;
     top: 8.4rem;
+    bottom: 0.5rem;
     width: calc(100vw - 1rem);
     padding: 0.8rem;
   }

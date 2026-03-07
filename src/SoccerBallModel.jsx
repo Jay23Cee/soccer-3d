@@ -3,19 +3,29 @@ import { useSphere } from "@react-three/cannon";
 import { useFrame } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
-import { BALL_BODY_NAME, BALL_CONFIG, SHOT_METER_CONFIG } from "./config/gameConfig";
+import { BALL_BODY_NAME, BALL_CONFIG, PLAYER_ROLES, SHOT_METER_CONFIG } from "./config/gameConfig";
 
-const PLAYER_POSSESSION_CONFIG = {
-  TOUCH_RADIUS: 1.75,
-  HEIGHT_TOLERANCE: 2.2,
-  FOLLOW_OFFSET: 1.2,
-  FOLLOW_HEIGHT_MULTIPLIER: 1.02,
-  KICK_DECAY_DURATION_MS: 950,
-  KICK_END_SPEED: 8.5,
-  REACQUIRE_COOLDOWN_MS: 300,
+const BALL_MODES = {
+  LOOSE: "loose",
+  ATTACHED: "attached",
+  RELEASED: "released",
 };
 
-const PRE_POSSESSION_AUTO_TAP_WINDOW_MS = 200;
+const BALL_OWNERSHIP_CONFIG = {
+  CLAIM_RADIUS: 1.85,
+  IMMEDIATE_CLAIM_RADIUS: 1.2,
+  CLAIM_CONFIRM_MS: 90,
+  CONTEST_RADIUS: 1.7,
+  CONTEST_CONFIRM_MS: 110,
+  HEIGHT_TOLERANCE: 2.4,
+  FOLLOW_OFFSET: 1.2,
+  FOLLOW_HEIGHT_MULTIPLIER: 1.02,
+  RELEASE_CLAIM_LOCK_MS: 220,
+  RELEASE_TO_LOOSE_MS: 320,
+  REACQUIRE_COOLDOWN_MS: 280,
+  PRE_POSSESSION_AUTO_TAP_WINDOW_MS: 200,
+};
+
 const PLAYER_SHOOT_KEY = "d";
 
 const SHOT_CHARGE_IDLE = {
@@ -57,31 +67,145 @@ function worldForceFromArrowKey(key, magnitude) {
   }
 }
 
-function SoccerBallModel({
-  scale,
-  resetRef,
-  kickoffRef,
-  externalBallCommand,
-  controlsEnabled,
-  mapMovementKeyToForce,
-  teamOnePlayers = [],
-  playerControlsEnabled = false,
-  passCommand,
-  onPassCommandConsumed,
-  onOutOfBounds,
-  activePowerZone,
-  onPowerZoneEnter,
-  speedMultiplier = 1,
-  shotPowerMultiplier = 1,
-  controlAssistMultiplier = 1,
-  onShotChargeChange,
-  onKickRelease,
-  onBallSnapshot,
-  onPossessionChange,
-  onShotEvent,
-  replayActive = false,
-  replayFrameBall = null,
-}) {
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function normalize2D(vector) {
+  const magnitude = Math.hypot(vector[0], vector[1]);
+  if (magnitude <= 0.0001) {
+    return [0, 0];
+  }
+
+  return [vector[0] / magnitude, vector[1] / magnitude];
+}
+
+function facingVector(rotation) {
+  const yaw = Number.isFinite(rotation?.[1]) ? rotation[1] : 0;
+  return [Math.sin(yaw), Math.cos(yaw)];
+}
+
+function actorBallAnchor(actor, scale) {
+  const position = actor?.position || actor?.spawnPosition || [0, 0, 0];
+  const rotation = actor?.rotation || actor?.spawnRotation || [0, 0, 0];
+  const [facingX, facingZ] = facingVector(rotation);
+  const offset =
+    BALL_OWNERSHIP_CONFIG.FOLLOW_OFFSET +
+    scale * 0.35 +
+    (actor?.role === PLAYER_ROLES.GOALKEEPER ? 0.18 : 0);
+  const height =
+    position[1] + Math.max(0.55, scale * BALL_OWNERSHIP_CONFIG.FOLLOW_HEIGHT_MULTIPLIER);
+
+  return [position[0] + facingX * offset, height, position[2] + facingZ * offset];
+}
+
+function candidateScore(actor, ballPosition) {
+  const actorPosition = actor?.position || actor?.spawnPosition || [0, 0, 0];
+  const toBall = [ballPosition[0] - actorPosition[0], ballPosition[2] - actorPosition[2]];
+  const direction = normalize2D(toBall);
+  const [facingX, facingZ] = facingVector(actor?.rotation || actor?.spawnRotation);
+  const facingAlignment = direction[0] * facingX + direction[1] * facingZ;
+  const keeperBonus = actor?.role === PLAYER_ROLES.GOALKEEPER ? 0.08 : 0;
+
+  return Math.hypot(toBall[0], toBall[1]) - facingAlignment * 0.3 - keeperBonus;
+}
+
+function buildClaimCandidates(players, ballPosition, ballY, scale) {
+  return (Array.isArray(players) ? players : [])
+    .filter((player) => player?.playerId && Array.isArray(player.position || player.spawnPosition))
+    .map((player) => {
+      const position = player.position || player.spawnPosition;
+      const distance = Math.hypot(ballPosition[0] - position[0], ballPosition[2] - position[2]);
+      const targetHeight =
+        position[1] + Math.max(0.55, scale * BALL_OWNERSHIP_CONFIG.FOLLOW_HEIGHT_MULTIPLIER);
+      const alignedByHeight =
+        Math.abs(ballY - targetHeight) <= BALL_OWNERSHIP_CONFIG.HEIGHT_TOLERANCE;
+      const radius =
+        BALL_OWNERSHIP_CONFIG.CLAIM_RADIUS +
+        scale * 0.35 +
+        (player.role === PLAYER_ROLES.GOALKEEPER ? 0.35 : 0);
+
+      return {
+        ...player,
+        position,
+        distance,
+        targetHeight,
+        inRange: distance <= radius && alignedByHeight,
+        score: candidateScore({ ...player, position }, ballPosition),
+      };
+    })
+    .filter((candidate) => candidate.inRange)
+    .sort((left, right) => left.score - right.score);
+}
+
+function buildLaunchVector({ actor, targetPosition, targetPlayer, type, power = 1, shotPowerMultiplier }) {
+  const actorPosition = actor?.position || actor?.spawnPosition || [0, 0, 0];
+  const actorRotation = actor?.rotation || actor?.spawnRotation || [0, 0, 0];
+  const [facingX, facingZ] = facingVector(actorRotation);
+  const desiredTarget = targetPlayer?.position || targetPosition || [
+    actorPosition[0] + facingX * 18,
+    0,
+    actorPosition[2] + facingZ * 18,
+  ];
+  const direction = normalize2D([
+    desiredTarget[0] - actorPosition[0],
+    desiredTarget[2] - actorPosition[2],
+  ]);
+  const resolvedDirection =
+    direction[0] === 0 && direction[1] === 0 ? [facingX, facingZ] : direction;
+
+  if (type === "pass") {
+    return [
+      resolvedDirection[0] * BALL_CONFIG.FORCE * clamp(power, 0.7, 1.45),
+      1.15,
+      resolvedDirection[1] * BALL_CONFIG.FORCE * clamp(power, 0.7, 1.45),
+    ];
+  }
+
+  if (type === "clear") {
+    return [
+      resolvedDirection[0] * BALL_CONFIG.FORCE * clamp(power, 0.9, 1.5),
+      2.4,
+      resolvedDirection[1] * BALL_CONFIG.FORCE * clamp(power, 0.9, 1.5),
+    ];
+  }
+
+  const speed = clamp(power, 0.85, 1.35) * shotPowerMultiplier;
+  return [
+    resolvedDirection[0] * SHOT_METER_CONFIG.MAX_LAUNCH_SPEED * speed,
+    SHOT_METER_CONFIG.MIN_UPWARD_SPEED + 1.3 * speed,
+    resolvedDirection[1] * SHOT_METER_CONFIG.MAX_LAUNCH_SPEED * speed,
+  ];
+}
+
+function SoccerBallModel(props) {
+  const {
+    scale,
+    resetRef,
+    kickoffRef,
+    ballActionCommand,
+    onBallActionResolved,
+    controlsEnabled,
+    mapMovementKeyToForce,
+    players = [],
+    controlledPlayerId = null,
+    controlledTeamId = "teamOne",
+    playerControlsEnabled = false,
+    onOutOfBounds,
+    activePowerZone,
+    onPowerZoneEnter,
+    speedMultiplier = 1,
+    shotPowerMultiplier = 1,
+    controlAssistMultiplier = 1,
+    onShotChargeChange,
+    onKickRelease,
+    onBallSnapshot,
+    onPossessionChange,
+    onShotEvent,
+    replayActive = false,
+    replayFrameBall = null,
+  } = props;
+
   const { scene } = useGLTF("/ball/scene.gltf");
   const ballScene = useMemo(() => scene.clone(), [scene]);
   const [ref, api] = useSphere(() => ({
@@ -99,9 +223,13 @@ function SoccerBallModel({
   const velocityRef = useRef([0, 0, 0]);
   const ballPositionRef = useRef([...BALL_CONFIG.SPAWN_POSITION]);
   const directionRef = useRef([0, 0, 0]);
-  const kickRequestedRef = useRef(null);
   const possessionRef = useRef(null);
+  const ballModeRef = useRef(BALL_MODES.LOOSE);
+  const kickoffSetupRef = useRef(null);
+  const claimCandidateRef = useRef(null);
+  const contestCandidateRef = useRef(null);
   const possessionLockUntilRef = useRef(0);
+  const releaseToLooseAtRef = useRef(0);
   const spaceHeldRef = useRef(false);
   const pendingAutoTapRef = useRef(null);
   const shotChargeStartAtRef = useRef(0);
@@ -109,16 +237,21 @@ function SoccerBallModel({
   const shotChargingRef = useRef(false);
   const shotChargeCooldownUntilRef = useRef(0);
   const lastShotChargeStateRef = useRef(SHOT_CHARGE_IDLE);
-  const kickDecayStartAtRef = useRef(0);
-  const kickDecayEndAtRef = useRef(0);
-  const kickStartSpeedRef = useRef(0);
   const outOfBoundsLockRef = useRef(false);
   const outOfBoundsTimerRef = useRef(null);
   const triggeredZoneIdRef = useRef(null);
   const lastPossessionRef = useRef(null);
   const lastSnapshotAtMsRef = useRef(0);
-  const appliedExternalCommandIdRef = useRef(null);
-  const appliedPassCommandIdRef = useRef(null);
+  const appliedBallActionIdRef = useRef(null);
+
+  const playersById = useMemo(
+    () =>
+      (Array.isArray(players) ? players : []).reduce((lookup, player) => {
+        lookup[player.playerId] = player;
+        return lookup;
+      }, {}),
+    [players]
+  );
 
   const emitShotChargeState = useCallback(
     (nextState) => {
@@ -158,20 +291,60 @@ function SoccerBallModel({
       const previousPlayerId = previous?.playerId || null;
       const nextTeamId = nextPossession?.teamId || null;
       const nextPlayerId = nextPossession?.playerId || null;
-      const unchanged = previousTeamId === nextTeamId && previousPlayerId === nextPlayerId;
-      if (unchanged) {
+      if (previousTeamId === nextTeamId && previousPlayerId === nextPlayerId) {
         return;
       }
 
       lastPossessionRef.current = nextPossession
-        ? {
-            teamId: nextTeamId,
-            playerId: nextPlayerId,
-          }
+        ? { teamId: nextTeamId, playerId: nextPlayerId }
         : null;
       onPossessionChange(lastPossessionRef.current);
     },
     [onPossessionChange]
+  );
+
+  const clearPossession = useCallback(() => {
+    possessionRef.current = null;
+    emitPossessionChange(null);
+  }, [emitPossessionChange]);
+
+  const attachPossession = useCallback(
+    (actor) => {
+      if (!actor?.playerId || !actor.teamId) {
+        return;
+      }
+
+      possessionRef.current = {
+        teamId: actor.teamId,
+        playerId: actor.playerId,
+      };
+      ballModeRef.current = BALL_MODES.ATTACHED;
+      emitPossessionChange(possessionRef.current);
+    },
+    [emitPossessionChange]
+  );
+
+  const alignBallToActor = useCallback(
+    (actor) => {
+      const anchor = actorBallAnchor(actor, scale);
+      api.position.set(anchor[0], anchor[1], anchor[2]);
+      api.velocity.set(0, 0, 0);
+      api.angularVelocity.set(0, 0, 0);
+      ballPositionRef.current = anchor;
+      velocityRef.current = [0, 0, 0];
+    },
+    [api, scale]
+  );
+
+  const placeStationaryBall = useCallback(
+    (nextPosition) => {
+      api.position.set(nextPosition[0], nextPosition[1], nextPosition[2]);
+      api.velocity.set(0, 0, 0);
+      api.angularVelocity.set(0, 0, 0);
+      ballPositionRef.current = [...nextPosition];
+      velocityRef.current = [0, 0, 0];
+    },
+    [api]
   );
 
   const resetShotCharge = useCallback(() => {
@@ -181,23 +354,164 @@ function SoccerBallModel({
     shotChargeCooldownUntilRef.current = 0;
     spaceHeldRef.current = false;
     pendingAutoTapRef.current = null;
-    kickRequestedRef.current = null;
     emitShotChargeState(SHOT_CHARGE_IDLE);
   }, [emitShotChargeState]);
 
-  const startShotCharge = useCallback(
-    (startedAtMs) => {
-      shotChargingRef.current = true;
-      shotChargeStartAtRef.current = startedAtMs;
-      shotChargeRatioRef.current = 0;
-      emitShotChargeState({
-        isCharging: true,
-        chargeRatio: 0,
-        isPerfect: false,
-        canShoot: true,
+  const releaseBall = useCallback(
+    ({
+      actor,
+      type,
+      targetPosition = null,
+      targetPlayer = null,
+      power = 1,
+      triggerShotEvent = true,
+      treatAsSave = false,
+      triggerKickRelease = null,
+    }) => {
+      const now = getNowMs();
+      const anchor = actorBallAnchor(actor, scale);
+      const vector = buildLaunchVector({
+        actor,
+        targetPosition,
+        targetPlayer,
+        type,
+        power,
+        shotPowerMultiplier,
       });
+
+      ballModeRef.current = BALL_MODES.RELEASED;
+      possessionLockUntilRef.current = now + BALL_OWNERSHIP_CONFIG.RELEASE_CLAIM_LOCK_MS;
+      releaseToLooseAtRef.current = now + BALL_OWNERSHIP_CONFIG.RELEASE_TO_LOOSE_MS;
+      claimCandidateRef.current = null;
+      contestCandidateRef.current = null;
+      api.position.set(anchor[0], anchor[1], anchor[2]);
+      api.velocity.set(vector[0], vector[1], vector[2]);
+      api.angularVelocity.set(0, 0, 0);
+      ballPositionRef.current = anchor;
+      velocityRef.current = [...vector];
+      clearPossession();
+
+      kickoffSetupRef.current = null;
+
+      if (triggerKickRelease) {
+        onKickRelease?.(triggerKickRelease);
+      }
+
+      if (triggerShotEvent) {
+        if (treatAsSave) {
+          onShotEvent?.({
+            type: "save",
+            teamId: actor.teamId,
+            actorId: actor.playerId,
+            releasedAtMs: now,
+          });
+        } else if (type === "shot") {
+          onShotEvent?.({
+            type: "shot",
+            teamId: actor.teamId,
+            actorId: actor.playerId,
+            releasedAtMs: now,
+          });
+        }
+      }
     },
-    [emitShotChargeState]
+    [api, clearPossession, onKickRelease, onShotEvent, scale, shotPowerMultiplier]
+  );
+
+  const resetBall = useCallback(() => {
+    directionRef.current = [0, 0, 0];
+    possessionLockUntilRef.current = 0;
+    releaseToLooseAtRef.current = 0;
+    ballModeRef.current = BALL_MODES.LOOSE;
+    kickoffSetupRef.current = null;
+    claimCandidateRef.current = null;
+    contestCandidateRef.current = null;
+    clearPossession();
+    resetShotCharge();
+    outOfBoundsLockRef.current = false;
+    triggeredZoneIdRef.current = null;
+    placeStationaryBall(BALL_CONFIG.SPAWN_POSITION);
+  }, [clearPossession, placeStationaryBall, resetShotCharge]);
+
+  const kickoffBall = useCallback(
+    (kickoffSetup = null) => {
+      directionRef.current = [0, 0, 0];
+      possessionLockUntilRef.current = 0;
+      releaseToLooseAtRef.current = 0;
+      ballModeRef.current = BALL_MODES.LOOSE;
+      claimCandidateRef.current = null;
+      contestCandidateRef.current = null;
+      clearPossession();
+      resetShotCharge();
+      outOfBoundsLockRef.current = false;
+      triggeredZoneIdRef.current = null;
+
+      const spotPosition = Array.isArray(kickoffSetup?.spotPosition)
+        ? kickoffSetup.spotPosition
+        : [0, 0, 0];
+      const kickoffHeight = Math.max(0.55, scale * BALL_OWNERSHIP_CONFIG.FOLLOW_HEIGHT_MULTIPLIER);
+      kickoffSetupRef.current =
+        kickoffSetup?.takerId && kickoffSetup?.teamId
+          ? {
+              id: kickoffSetup.id || `kickoff-${kickoffSetup.teamId}-${kickoffSetup.takerId}`,
+              teamId: kickoffSetup.teamId,
+              takerId: kickoffSetup.takerId,
+            }
+          : null;
+      placeStationaryBall([spotPosition[0], kickoffHeight, spotPosition[2]]);
+    },
+    [clearPossession, placeStationaryBall, resetShotCharge, scale]
+  );
+
+  const resolveLegalActor = useCallback(
+    (command) => {
+      const actor = playersById[command.actorId];
+      if (!actor || actor.teamId !== command.teamId) {
+        return { actor: null, accepted: false, treatAsSave: false };
+      }
+
+      const kickoffSetup = kickoffSetupRef.current;
+      if (
+        kickoffSetup?.takerId === actor.playerId &&
+        kickoffSetup?.teamId === actor.teamId
+      ) {
+        return { actor, accepted: true, treatAsSave: false };
+      }
+
+      const currentPossession = possessionRef.current;
+      if (
+        currentPossession?.playerId === actor.playerId &&
+        currentPossession?.teamId === actor.teamId
+      ) {
+        return { actor, accepted: true, treatAsSave: false };
+      }
+
+      const candidates = buildClaimCandidates(
+        players,
+        ballPositionRef.current,
+        ballPositionRef.current[1],
+        scale
+      );
+      const bestCandidate = candidates[0] || null;
+      if (
+        bestCandidate?.playerId === actor.playerId &&
+        ballModeRef.current !== BALL_MODES.ATTACHED
+      ) {
+        return { actor: bestCandidate, accepted: true, treatAsSave: false };
+      }
+
+      const actorPosition = actor.position || actor.spawnPosition || [0, 0, 0];
+      const actorDistance = Math.hypot(
+        ballPositionRef.current[0] - actorPosition[0],
+        ballPositionRef.current[2] - actorPosition[2]
+      );
+      const keeperSave =
+        actor.role === PLAYER_ROLES.GOALKEEPER &&
+        actorDistance <= BALL_OWNERSHIP_CONFIG.CLAIM_RADIUS + 0.6;
+
+      return { actor, accepted: keeperSave, treatAsSave: keeperSave };
+    },
+    [players, playersById, scale]
   );
 
   useEffect(() => {
@@ -216,50 +530,6 @@ function SoccerBallModel({
     });
   }, [ballScene]);
 
-  const resetBall = useCallback(() => {
-    directionRef.current = [0, 0, 0];
-    kickRequestedRef.current = null;
-    possessionRef.current = null;
-    possessionLockUntilRef.current = 0;
-    shotChargeStartAtRef.current = 0;
-    shotChargeRatioRef.current = 0;
-    shotChargingRef.current = false;
-    shotChargeCooldownUntilRef.current = 0;
-    spaceHeldRef.current = false;
-    pendingAutoTapRef.current = null;
-    kickDecayStartAtRef.current = 0;
-    kickDecayEndAtRef.current = 0;
-    kickStartSpeedRef.current = 0;
-    outOfBoundsLockRef.current = false;
-    triggeredZoneIdRef.current = null;
-    lastPossessionRef.current = null;
-    emitShotChargeState(SHOT_CHARGE_IDLE);
-    emitPossessionChange(null);
-    ballPositionRef.current = [...BALL_CONFIG.SPAWN_POSITION];
-    api.position.set(...BALL_CONFIG.SPAWN_POSITION);
-    api.velocity.set(0, 0, 0);
-    api.angularVelocity.set(0, 0, 0);
-  }, [api, emitPossessionChange, emitShotChargeState]);
-
-  const kickoffBall = useCallback(() => {
-    kickRequestedRef.current = null;
-    possessionRef.current = null;
-    possessionLockUntilRef.current = getNowMs() + PLAYER_POSSESSION_CONFIG.REACQUIRE_COOLDOWN_MS;
-    shotChargeStartAtRef.current = 0;
-    shotChargeRatioRef.current = 0;
-    shotChargingRef.current = false;
-    shotChargeCooldownUntilRef.current = 0;
-    spaceHeldRef.current = false;
-    pendingAutoTapRef.current = null;
-    kickDecayStartAtRef.current = 0;
-    kickDecayEndAtRef.current = 0;
-    kickStartSpeedRef.current = 0;
-    emitShotChargeState(SHOT_CHARGE_IDLE);
-    emitPossessionChange(null);
-    const directionSign = Math.random() > 0.5 ? 1 : -1;
-    api.applyImpulse([0, 2.2 * shotPowerMultiplier, directionSign * 8], [0, 0, 0]);
-  }, [api, emitPossessionChange, emitShotChargeState, shotPowerMultiplier]);
-
   useEffect(() => {
     if (resetRef) {
       resetRef.current = resetBall;
@@ -270,7 +540,7 @@ function SoccerBallModel({
         resetRef.current = null;
       }
     };
-  }, [resetRef, resetBall]);
+  }, [resetBall, resetRef]);
 
   useEffect(() => {
     if (kickoffRef) {
@@ -282,7 +552,7 @@ function SoccerBallModel({
         kickoffRef.current = null;
       }
     };
-  }, [kickoffRef, kickoffBall]);
+  }, [kickoffBall, kickoffRef]);
 
   useEffect(() => {
     if (!activePowerZone) {
@@ -293,23 +563,28 @@ function SoccerBallModel({
   useEffect(() => {
     if (!controlsEnabled) {
       directionRef.current = [0, 0, 0];
+      return;
     }
-  }, [controlsEnabled]);
+
+    kickoffSetupRef.current = null;
+    ballModeRef.current = BALL_MODES.LOOSE;
+    claimCandidateRef.current = null;
+    contestCandidateRef.current = null;
+    clearPossession();
+    resetShotCharge();
+  }, [clearPossession, controlsEnabled, resetShotCharge]);
 
   useEffect(() => {
     if (playerControlsEnabled) {
       return;
     }
 
-    kickRequestedRef.current = null;
-    possessionRef.current = null;
-    emitPossessionChange(null);
     resetShotCharge();
-  }, [emitPossessionChange, playerControlsEnabled, resetShotCharge]);
+  }, [playerControlsEnabled, resetShotCharge]);
 
   useEffect(() => {
     const handleKeyDown = (event) => {
-      if (!playerControlsEnabled || !isShootKey(event.key)) {
+      if (!playerControlsEnabled || !controlledPlayerId || !isShootKey(event.key)) {
         return;
       }
 
@@ -325,19 +600,30 @@ function SoccerBallModel({
         return;
       }
 
-      if (possessionRef.current?.teamId === "teamOne") {
-        pendingAutoTapRef.current = null;
-        startShotCharge(now);
+      const currentPossession = possessionRef.current;
+      if (
+        currentPossession?.teamId === controlledTeamId &&
+        currentPossession?.playerId === controlledPlayerId
+      ) {
+        shotChargingRef.current = true;
+        shotChargeStartAtRef.current = now;
+        shotChargeRatioRef.current = 0;
+        emitShotChargeState({
+          isCharging: true,
+          chargeRatio: 0,
+          isPerfect: false,
+          canShoot: true,
+        });
         return;
       }
 
       pendingAutoTapRef.current = {
-        expiresAt: now + PRE_POSSESSION_AUTO_TAP_WINDOW_MS,
+        expiresAt: now + BALL_OWNERSHIP_CONFIG.PRE_POSSESSION_AUTO_TAP_WINDOW_MS,
       };
     };
 
     const handleKeyUp = (event) => {
-      if (!playerControlsEnabled || !isShootKey(event.key)) {
+      if (!playerControlsEnabled || !controlledPlayerId || !isShootKey(event.key)) {
         return;
       }
 
@@ -350,26 +636,48 @@ function SoccerBallModel({
       }
 
       shotChargingRef.current = false;
-
       const chargeDurationMs = Math.max(0, getNowMs() - shotChargeStartAtRef.current);
       const uiChargeRatio = quantizeChargeRatio(chargeDurationMs / SHOT_METER_CONFIG.MAX_CHARGE_MS);
       const effectiveChargeRatio = Math.max(uiChargeRatio, SHOT_METER_CONFIG.MIN_CHARGE_RATIO);
       const isPerfect =
         uiChargeRatio >= SHOT_METER_CONFIG.PERFECT_WINDOW_START &&
         uiChargeRatio <= SHOT_METER_CONFIG.PERFECT_WINDOW_END;
+      const actor = playersById[controlledPlayerId];
 
-      shotChargeRatioRef.current = uiChargeRatio;
-      kickRequestedRef.current = {
-        uiChargeRatio,
-        effectiveChargeRatio,
-        isPerfect,
-      };
-      emitShotChargeState({
-        isCharging: false,
-        chargeRatio: uiChargeRatio,
-        isPerfect,
-        canShoot: true,
+      if (!actor || possessionRef.current?.playerId !== controlledPlayerId) {
+        emitShotChargeState(SHOT_CHARGE_IDLE);
+        return;
+      }
+
+      const baseLaunchSpeed = THREE.MathUtils.lerp(
+        SHOT_METER_CONFIG.MIN_LAUNCH_SPEED,
+        SHOT_METER_CONFIG.MAX_LAUNCH_SPEED,
+        effectiveChargeRatio
+      );
+      const launchSpeed = Math.min(
+        baseLaunchSpeed * shotPowerMultiplier * (isPerfect ? 1.1 : 1),
+        SHOT_METER_CONFIG.MAX_LAUNCH_SPEED * shotPowerMultiplier
+      );
+      const launchUpwardSpeed = THREE.MathUtils.lerp(
+        SHOT_METER_CONFIG.MIN_UPWARD_SPEED,
+        SHOT_METER_CONFIG.MAX_UPWARD_SPEED,
+        effectiveChargeRatio
+      );
+
+      shotChargeCooldownUntilRef.current = getNowMs() + SHOT_METER_CONFIG.RECHARGE_COOLDOWN_MS;
+      releaseBall({
+        actor,
+        type: "shot",
+        power: launchSpeed / SHOT_METER_CONFIG.MAX_LAUNCH_SPEED,
+        triggerKickRelease: {
+          chargeRatio: effectiveChargeRatio,
+          isPerfect,
+          launchSpeed,
+          upwardSpeed: launchUpwardSpeed,
+          releasedAtMs: getNowMs(),
+        },
       });
+      emitShotChargeState(SHOT_CHARGE_IDLE);
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -379,7 +687,15 @@ function SoccerBallModel({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [emitShotChargeState, playerControlsEnabled, startShotCharge]);
+  }, [
+    controlledPlayerId,
+    controlledTeamId,
+    emitShotChargeState,
+    playerControlsEnabled,
+    playersById,
+    releaseBall,
+    shotPowerMultiplier,
+  ]);
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -395,7 +711,7 @@ function SoccerBallModel({
         api.applyImpulse([0, BALL_CONFIG.JUMP_IMPULSE * shotPowerMultiplier, 0], [0, 0, 0]);
         onShotEvent?.({
           type: "ball_pop",
-          teamId: "teamOne",
+          teamId: controlledTeamId,
           releasedAtMs: getNowMs(),
         });
         return;
@@ -432,62 +748,81 @@ function SoccerBallModel({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [api, controlsEnabled, mapMovementKeyToForce, onShotEvent, shotPowerMultiplier, speedMultiplier]);
+  }, [
+    api,
+    controlledTeamId,
+    controlsEnabled,
+    mapMovementKeyToForce,
+    onShotEvent,
+    shotPowerMultiplier,
+    speedMultiplier,
+  ]);
 
   useEffect(() => {
-    if (!externalBallCommand || !externalBallCommand.id) {
+    if (!ballActionCommand?.id) {
       return;
     }
 
-    if (appliedExternalCommandIdRef.current === externalBallCommand.id) {
+    if (appliedBallActionIdRef.current === ballActionCommand.id) {
       return;
     }
 
-    appliedExternalCommandIdRef.current = externalBallCommand.id;
-
-    if (externalBallCommand.type === "impulse" && Array.isArray(externalBallCommand.vector)) {
-      const [x = 0, y = 0, z = 0] = externalBallCommand.vector;
-      api.applyImpulse([x, y, z], [0, 0, 0]);
+    appliedBallActionIdRef.current = ballActionCommand.id;
+    const resolution = resolveLegalActor(ballActionCommand);
+    if (!resolution.accepted || !resolution.actor) {
+      onBallActionResolved?.({
+        id: ballActionCommand.id,
+        accepted: false,
+        actorId: ballActionCommand.actorId,
+        teamId: ballActionCommand.teamId,
+        type: ballActionCommand.type,
+        targetPlayerId: ballActionCommand.targetPlayerId || null,
+      });
+      return;
     }
 
-    if (externalBallCommand.type === "velocity" && Array.isArray(externalBallCommand.vector)) {
-      const [x = 0, y = 0, z = 0] = externalBallCommand.vector;
-      api.velocity.set(x, y, z);
+    const actor = resolution.actor;
+    const targetPlayer =
+      ballActionCommand.targetPlayerId && playersById[ballActionCommand.targetPlayerId]
+        ? playersById[ballActionCommand.targetPlayerId]
+        : null;
+
+    if (ballModeRef.current !== BALL_MODES.ATTACHED) {
+      attachPossession(actor);
+      alignBallToActor(actor);
     }
 
-    if (externalBallCommand.event) {
-      onShotEvent?.(externalBallCommand.event);
-    }
-  }, [api, externalBallCommand, onShotEvent]);
+    releaseBall({
+      actor,
+      type: ballActionCommand.type,
+      targetPosition: ballActionCommand.targetPosition,
+      targetPlayer,
+      power: ballActionCommand.power,
+      triggerShotEvent: ballActionCommand.type !== "pass",
+      treatAsSave: resolution.treatAsSave,
+    });
+
+    onBallActionResolved?.({
+      id: ballActionCommand.id,
+      accepted: true,
+      actorId: ballActionCommand.actorId,
+      teamId: ballActionCommand.teamId,
+      type: ballActionCommand.type,
+      targetPlayerId: ballActionCommand.targetPlayerId || null,
+    });
+  }, [
+    alignBallToActor,
+    attachPossession,
+    ballActionCommand,
+    onBallActionResolved,
+    playersById,
+    releaseBall,
+    resolveLegalActor,
+  ]);
 
   useEffect(() => {
-    if (!passCommand || !passCommand.id) {
-      return;
-    }
-
-    if (appliedPassCommandIdRef.current === passCommand.id) {
-      return;
-    }
-
-    appliedPassCommandIdRef.current = passCommand.id;
-    kickRequestedRef.current = null;
-    possessionRef.current = null;
-    emitPossessionChange(null);
-    possessionLockUntilRef.current = getNowMs() + PLAYER_POSSESSION_CONFIG.REACQUIRE_COOLDOWN_MS;
-    resetShotCharge();
-
-    if (Array.isArray(passCommand.velocity)) {
-      const [x = 0, y = 0, z = 0] = passCommand.velocity;
-      api.velocity.set(x, y, z);
-      api.angularVelocity.set(0, 0, 0);
-    }
-
-    onPassCommandConsumed?.(passCommand.id);
-  }, [api, emitPossessionChange, onPassCommandConsumed, passCommand, resetShotCharge]);
-
-  useEffect(() => {
-    const unsubscribeVelocity = api.velocity.subscribe((velocity) => {
-      velocityRef.current = velocity;
+    const unsubscribeVelocity = api.velocity.subscribe((nextVelocity) => {
+      velocityRef.current = nextVelocity;
     });
 
     const unsubscribePosition = api.position.subscribe(([x, y, z]) => {
@@ -497,14 +832,12 @@ function SoccerBallModel({
         return;
       }
 
-      if (!onOutOfBounds || outOfBoundsLockRef.current) {
-        return;
-      }
-
       if (
-        Math.abs(x) > BALL_CONFIG.OUT_OF_BOUNDS.X ||
-        Math.abs(z) > BALL_CONFIG.OUT_OF_BOUNDS.Z ||
-        y < BALL_CONFIG.OUT_OF_BOUNDS.Y
+        onOutOfBounds &&
+        !outOfBoundsLockRef.current &&
+        (Math.abs(x) > BALL_CONFIG.OUT_OF_BOUNDS.X ||
+          Math.abs(z) > BALL_CONFIG.OUT_OF_BOUNDS.Z ||
+          y < BALL_CONFIG.OUT_OF_BOUNDS.Y)
       ) {
         outOfBoundsLockRef.current = true;
         onOutOfBounds();
@@ -546,6 +879,7 @@ function SoccerBallModel({
   useFrame(() => {
     const now = getNowMs();
     let [vx, vy, vz] = velocityRef.current;
+
     if (replayActive && replayFrameBall?.position) {
       const [px, py, pz] = replayFrameBall.position;
       const frameVelocity = replayFrameBall.velocity || [0, 0, 0];
@@ -554,9 +888,9 @@ function SoccerBallModel({
       api.angularVelocity.set(0, 0, 0);
       ballPositionRef.current = [px, py, pz];
       velocityRef.current = [...frameVelocity];
+      ballModeRef.current = BALL_MODES.LOOSE;
       if (possessionRef.current) {
-        possessionRef.current = null;
-        emitPossessionChange(null);
+        clearPossession();
       }
       return;
     }
@@ -567,63 +901,26 @@ function SoccerBallModel({
         timestampMs: now,
         position: [...ballPositionRef.current],
         velocity: [vx, vy, vz],
+        mode: ballModeRef.current,
+        possession: possessionRef.current ? { ...possessionRef.current } : null,
       });
     }
 
     const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
-    const kickDecayActive = now < kickDecayEndAtRef.current;
     const boostedMaxSpeed = BALL_CONFIG.MAX_SPEED * (speedMultiplier > 1 ? 1.35 : 1);
-    const maxSpeed = kickDecayActive
-      ? Math.max(boostedMaxSpeed, kickStartSpeedRef.current)
-      : boostedMaxSpeed;
-
-    if (speed > maxSpeed) {
-      const scaleVelocity = maxSpeed / speed;
+    if (speed > boostedMaxSpeed && ballModeRef.current !== BALL_MODES.ATTACHED) {
+      const scaleVelocity = boostedMaxSpeed / speed;
       vx *= scaleVelocity;
       vy *= scaleVelocity;
       vz *= scaleVelocity;
       api.velocity.set(vx, vy, vz);
     }
 
-    if (kickDecayActive) {
-      const decayProgress = THREE.MathUtils.clamp(
-        (now - kickDecayStartAtRef.current) / PLAYER_POSSESSION_CONFIG.KICK_DECAY_DURATION_MS,
-        0,
-        1
-      );
-      const planarSpeed = Math.hypot(vx, vz);
-      const targetPlanarSpeed = THREE.MathUtils.lerp(
-        kickStartSpeedRef.current,
-        PLAYER_POSSESSION_CONFIG.KICK_END_SPEED,
-        decayProgress
-      );
-
-      if (planarSpeed > targetPlanarSpeed + 0.001) {
-        const planarScale = targetPlanarSpeed / planarSpeed;
-        vx *= planarScale;
-        vz *= planarScale;
-        api.velocity.set(vx, vy, vz);
-      }
-
-      if (decayProgress >= 1) {
-        kickDecayStartAtRef.current = 0;
-        kickDecayEndAtRef.current = 0;
-        kickStartSpeedRef.current = 0;
-      }
-    }
-
-    if (
-      controlsEnabled &&
-      (directionRef.current[0] !== 0 || directionRef.current[2] !== 0)
-    ) {
+    if (controlsEnabled && (directionRef.current[0] !== 0 || directionRef.current[2] !== 0)) {
       api.applyForce(directionRef.current, [0, 0, 0]);
 
       if (controlAssistMultiplier > 1) {
-        const directionalMagnitude = Math.hypot(
-          directionRef.current[0],
-          directionRef.current[2]
-        );
-
+        const directionalMagnitude = Math.hypot(directionRef.current[0], directionRef.current[2]);
         if (directionalMagnitude > 0.001) {
           const dirX = directionRef.current[0] / directionalMagnitude;
           const dirZ = directionRef.current[2] / directionalMagnitude;
@@ -632,26 +929,13 @@ function SoccerBallModel({
           const lateralVelocity = vx * perpX + vz * perpZ;
           const correctionMagnitude =
             -lateralVelocity * BALL_CONFIG.FORCE * 0.38 * controlAssistMultiplier;
-
           api.applyForce([perpX * correctionMagnitude, 0, perpZ * correctionMagnitude], [0, 0, 0]);
         }
       }
     }
 
-    const teamOneRoster = Array.isArray(teamOnePlayers) ? teamOnePlayers : [];
-    const currentTeamOnePossessorId =
-      possessionRef.current?.teamId === "teamOne" ? possessionRef.current.playerId : null;
-    const currentTeamOnePossessor =
-      currentTeamOnePossessorId
-        ? teamOneRoster.find((player) => player?.playerId === currentTeamOnePossessorId) || null
-        : null;
-    const currentRotation = currentTeamOnePossessor?.rotation || [0, Math.PI, 0];
-    const currentYaw = Number.isFinite(currentRotation?.[1]) ? currentRotation[1] : 0;
-    const facingX = Math.sin(currentYaw);
-    const facingZ = Math.cos(currentYaw);
-
     if (shotChargingRef.current) {
-      if (!playerControlsEnabled || !currentTeamOnePossessor) {
+      if (possessionRef.current?.playerId !== controlledPlayerId) {
         shotChargingRef.current = false;
         shotChargeStartAtRef.current = 0;
         shotChargeRatioRef.current = 0;
@@ -676,183 +960,121 @@ function SoccerBallModel({
       }
     }
 
-    const pendingKick = kickRequestedRef.current;
-    if (pendingKick) {
-      kickRequestedRef.current = null;
-
-      if (currentTeamOnePossessor) {
-        possessionRef.current = null;
-        emitPossessionChange(null);
-        possessionLockUntilRef.current = now + PLAYER_POSSESSION_CONFIG.REACQUIRE_COOLDOWN_MS;
-        const kickPowerMultiplier = THREE.MathUtils.clamp(shotPowerMultiplier, 1, 1.6);
-        const baseLaunchSpeed = THREE.MathUtils.lerp(
-          SHOT_METER_CONFIG.MIN_LAUNCH_SPEED,
-          SHOT_METER_CONFIG.MAX_LAUNCH_SPEED,
-          pendingKick.effectiveChargeRatio
-        );
-        const launchSpeedWithPerfect = baseLaunchSpeed * (pendingKick.isPerfect ? 1.1 : 1);
-        const launchSpeed = Math.min(
-          launchSpeedWithPerfect * kickPowerMultiplier,
-          SHOT_METER_CONFIG.MAX_LAUNCH_SPEED * kickPowerMultiplier
-        );
-
-        const baseUpwardSpeed = THREE.MathUtils.lerp(
-          SHOT_METER_CONFIG.MIN_UPWARD_SPEED,
-          SHOT_METER_CONFIG.MAX_UPWARD_SPEED,
-          pendingKick.effectiveChargeRatio
-        );
-        const launchUpwardSpeed =
-          baseUpwardSpeed * THREE.MathUtils.clamp(shotPowerMultiplier, 1, 1.35);
-
-        kickDecayStartAtRef.current = now;
-        kickDecayEndAtRef.current = now + PLAYER_POSSESSION_CONFIG.KICK_DECAY_DURATION_MS;
-        kickStartSpeedRef.current = launchSpeed;
-        shotChargeCooldownUntilRef.current = now + SHOT_METER_CONFIG.RECHARGE_COOLDOWN_MS;
-        shotChargeStartAtRef.current = 0;
-        shotChargeRatioRef.current = 0;
-        emitShotChargeState(SHOT_CHARGE_IDLE);
-
-        onKickRelease?.({
-          chargeRatio: pendingKick.effectiveChargeRatio,
-          isPerfect: pendingKick.isPerfect,
-          launchSpeed,
-          upwardSpeed: launchUpwardSpeed,
-          releasedAtMs: now,
-        });
-        onShotEvent?.({
-          type: "shot",
-          teamId: "teamOne",
-          chargeRatio: pendingKick.effectiveChargeRatio,
-          isPerfect: pendingKick.isPerfect,
-          releasedAtMs: now,
-          launchSpeed,
-          upwardSpeed: launchUpwardSpeed,
-        });
-
-        api.velocity.set(
-          facingX * launchSpeed,
-          launchUpwardSpeed,
-          facingZ * launchSpeed
-        );
+    const currentPossession = possessionRef.current;
+    if (currentPossession?.teamId === controlledTeamId && currentPossession?.playerId === controlledPlayerId) {
+      const pendingAutoTap = pendingAutoTapRef.current;
+      if (
+        pendingAutoTap &&
+        spaceHeldRef.current &&
+        now <= pendingAutoTap.expiresAt &&
+        !shotChargingRef.current
+      ) {
+        pendingAutoTapRef.current = null;
+        const actor = playersById[controlledPlayerId];
+        if (actor) {
+          releaseBall({
+            actor,
+            type: "shot",
+            power: SHOT_METER_CONFIG.MIN_CHARGE_RATIO,
+            triggerKickRelease: {
+              chargeRatio: SHOT_METER_CONFIG.MIN_CHARGE_RATIO,
+              isPerfect: false,
+              launchSpeed: SHOT_METER_CONFIG.MIN_LAUNCH_SPEED,
+              upwardSpeed: SHOT_METER_CONFIG.MIN_UPWARD_SPEED,
+              releasedAtMs: now,
+            },
+          });
+        }
       }
     }
 
-    if (!playerControlsEnabled || now < possessionLockUntilRef.current) {
-      if (possessionRef.current) {
-        possessionRef.current = null;
-        emitPossessionChange(null);
+    if (ballModeRef.current === BALL_MODES.RELEASED && now >= releaseToLooseAtRef.current) {
+      ballModeRef.current = BALL_MODES.LOOSE;
+    }
+
+    if (ballModeRef.current === BALL_MODES.ATTACHED) {
+      const possessor = currentPossession ? playersById[currentPossession.playerId] : null;
+      if (!possessor) {
+        ballModeRef.current = BALL_MODES.LOOSE;
+        clearPossession();
+      } else {
+        alignBallToActor(possessor);
+
+        const challengers = buildClaimCandidates(
+          players,
+          ballPositionRef.current,
+          ballPositionRef.current[1],
+          scale
+        )
+          .filter((candidate) => candidate.teamId !== possessor.teamId)
+          .filter((candidate) => candidate.distance <= BALL_OWNERSHIP_CONFIG.CONTEST_RADIUS);
+        const challenger = challengers[0] || null;
+
+        if (challenger) {
+          const currentContest = contestCandidateRef.current;
+          if (currentContest?.playerId !== challenger.playerId) {
+            contestCandidateRef.current = {
+              playerId: challenger.playerId,
+              startedAt: now,
+            };
+          } else if (now - currentContest.startedAt >= BALL_OWNERSHIP_CONFIG.CONTEST_CONFIRM_MS) {
+            attachPossession(challenger);
+            contestCandidateRef.current = null;
+          }
+        } else {
+          contestCandidateRef.current = null;
+        }
       }
+
       return;
     }
 
-    if (teamOneRoster.length === 0) {
-      if (possessionRef.current) {
-        possessionRef.current = null;
-        emitPossessionChange(null);
-      }
+    if (kickoffSetupRef.current) {
       return;
     }
 
-    const [ballX, ballY, ballZ] = ballPositionRef.current;
-    const touchDistance = PLAYER_POSSESSION_CONFIG.TOUCH_RADIUS + scale * 0.35;
-    const evaluatePossessionCandidate = (player) => {
-      if (!player || !Array.isArray(player.position)) {
-        return null;
+    if (controlsEnabled || now < possessionLockUntilRef.current) {
+      return;
+    }
+
+    const candidates = buildClaimCandidates(
+      players,
+      ballPositionRef.current,
+      ballPositionRef.current[1],
+      scale
+    );
+    const bestCandidate = candidates[0] || null;
+    if (!bestCandidate) {
+      claimCandidateRef.current = null;
+      return;
+    }
+
+    const currentClaim = claimCandidateRef.current;
+    if (currentClaim?.playerId !== bestCandidate.playerId) {
+      if (bestCandidate.distance <= BALL_OWNERSHIP_CONFIG.IMMEDIATE_CLAIM_RADIUS) {
+        attachPossession(bestCandidate);
+        alignBallToActor(bestCandidate);
+        claimCandidateRef.current = null;
+        return;
       }
-      const [candidateX, candidateY, candidateZ] = player.position;
-      const distanceToCandidate = Math.hypot(ballX - candidateX, ballZ - candidateZ);
-      const targetHeight =
-        candidateY +
-        Math.max(0.55, scale * PLAYER_POSSESSION_CONFIG.FOLLOW_HEIGHT_MULTIPLIER);
-      const alignedByHeight =
-        Math.abs(ballY - targetHeight) <= PLAYER_POSSESSION_CONFIG.HEIGHT_TOLERANCE;
-      return {
-        player,
-        distanceToCandidate,
-        targetHeight,
-        inRange: distanceToCandidate <= touchDistance && alignedByHeight,
+
+      claimCandidateRef.current = {
+        playerId: bestCandidate.playerId,
+        teamId: bestCandidate.teamId,
+        startedAt: now,
       };
-    };
-
-    let possessionCandidate = null;
-    if (currentTeamOnePossessor) {
-      const stickyCandidate = evaluatePossessionCandidate(currentTeamOnePossessor);
-      if (stickyCandidate?.inRange) {
-        possessionCandidate = stickyCandidate;
-      }
-    }
-
-    if (!possessionCandidate) {
-      for (const player of teamOneRoster) {
-        const candidate = evaluatePossessionCandidate(player);
-        if (!candidate?.inRange) {
-          continue;
-        }
-        if (
-          !possessionCandidate ||
-          candidate.distanceToCandidate < possessionCandidate.distanceToCandidate
-        ) {
-          possessionCandidate = candidate;
-        }
-      }
-    }
-
-    if (!possessionCandidate) {
-      if (possessionRef.current) {
-        possessionRef.current = null;
-        emitPossessionChange(null);
-      }
       return;
     }
 
-    const hadPossession = Boolean(possessionRef.current);
-    const samePossessor =
-      possessionRef.current?.teamId === "teamOne" &&
-      possessionRef.current?.playerId === possessionCandidate.player.playerId;
-    const nextPossession = {
-      teamId: "teamOne",
-      playerId: possessionCandidate.player.playerId,
-    };
-    possessionRef.current = nextPossession;
-    emitPossessionChange(nextPossession);
-
-    const pendingAutoTap = pendingAutoTapRef.current;
     if (
-      !hadPossession &&
-      !samePossessor &&
-      pendingAutoTap &&
-      spaceHeldRef.current &&
-      now <= pendingAutoTap.expiresAt
+      bestCandidate.distance <= BALL_OWNERSHIP_CONFIG.IMMEDIATE_CLAIM_RADIUS ||
+      now - currentClaim.startedAt >= BALL_OWNERSHIP_CONFIG.CLAIM_CONFIRM_MS
     ) {
-      kickRequestedRef.current = {
-        uiChargeRatio: 0,
-        effectiveChargeRatio: SHOT_METER_CONFIG.MIN_CHARGE_RATIO,
-        isPerfect: false,
-      };
-      pendingAutoTapRef.current = null;
-    } else if (pendingAutoTap && now > pendingAutoTap.expiresAt) {
-      pendingAutoTapRef.current = null;
+      attachPossession(bestCandidate);
+      alignBallToActor(bestCandidate);
+      claimCandidateRef.current = null;
     }
-
-    const playerPosition = possessionCandidate.player.position || [0, 0, 0];
-    const playerRotation = possessionCandidate.player.rotation || [0, Math.PI, 0];
-    const [playerX, , playerZ] = playerPosition;
-    const targetBallHeight = possessionCandidate.targetHeight;
-    const targetYaw = Number.isFinite(playerRotation?.[1]) ? playerRotation[1] : 0;
-    const targetFacingX = Math.sin(targetYaw);
-    const targetFacingZ = Math.cos(targetYaw);
-    const targetX =
-      playerX + targetFacingX * (PLAYER_POSSESSION_CONFIG.FOLLOW_OFFSET + scale * 0.35);
-    const targetY = targetBallHeight;
-    const targetZ =
-      playerZ + targetFacingZ * (PLAYER_POSSESSION_CONFIG.FOLLOW_OFFSET + scale * 0.35);
-
-    api.position.set(targetX, targetY, targetZ);
-    api.velocity.set(0, 0, 0);
-    api.angularVelocity.set(0, 0, 0);
-    ballPositionRef.current = [targetX, targetY, targetZ];
   });
-
   return (
     <group ref={ref} name={BALL_BODY_NAME} scale={[scale, scale, scale]}>
       <primitive object={ballScene} castShadow receiveShadow />

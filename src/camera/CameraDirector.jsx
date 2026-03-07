@@ -126,6 +126,15 @@ function getModeCameraPosition(mode, target, focus) {
   }
 }
 
+function applyGoalReplayZoom(position, target) {
+  const zoomScale = CAMERA_CONFIG.GOAL_REPLAY_ZOOM.POSITION_SCALE;
+  return [
+    target[0] + (position[0] - target[0]) * zoomScale,
+    target[1] + (position[1] - target[1]) * zoomScale,
+    target[2] + (position[2] - target[2]) * zoomScale,
+  ];
+}
+
 function introCamera(introProgress) {
   return [
     lerp(INTRO_CONFIG.CAMERA_START[0], INTRO_CONFIG.CAMERA_END[0], introProgress),
@@ -143,6 +152,7 @@ function CameraDirector({
   activePlayerPosition,
   replayFrame,
   isReplay,
+  replayEventType,
   introProgress,
   gameState,
   cameraNudge = [0, 0, 0],
@@ -242,14 +252,25 @@ function CameraDirector({
       gameState === "intro"
         ? introCamera(introProgress || 0)
         : getModeCameraPosition(targetMode, desiredTarget, effectiveFocus);
+    const goalReplayZoomActive = isReplay && replayEventType === "goal";
+    const zoomedPosition = goalReplayZoomActive
+      ? applyGoalReplayZoom(desiredPosition, desiredTarget)
+      : desiredPosition;
+    const targetFov = goalReplayZoomActive
+      ? clamp(
+          modeFov(targetMode) - CAMERA_CONFIG.GOAL_REPLAY_ZOOM.FOV_REDUCTION,
+          CAMERA_CONFIG.GOAL_REPLAY_ZOOM.MIN_FOV,
+          modeFov(targetMode)
+        )
+      : modeFov(targetMode);
 
     const alpha = isReplay
       ? CAMERA_CONFIG.REPLAY_TRANSITION_ALPHA
       : CAMERA_CONFIG.TRANSITION_ALPHA;
 
-    smoothedRef.current.position = lerpVector(smoothedRef.current.position, desiredPosition, alpha);
+    smoothedRef.current.position = lerpVector(smoothedRef.current.position, zoomedPosition, alpha);
     smoothedRef.current.target = lerpVector(smoothedRef.current.target, desiredTarget, alpha);
-    smoothedRef.current.fov = lerp(smoothedRef.current.fov, modeFov(targetMode), alpha);
+    smoothedRef.current.fov = lerp(smoothedRef.current.fov, targetFov, alpha);
 
     camera.position.set(
       smoothedRef.current.position[0] + cameraNudge[0],

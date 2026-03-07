@@ -6,8 +6,8 @@ const KIT_VARIANTS = {
     jerseyTrim: "#dbeafe",
   },
   secondary: {
-    jersey: "#f97316",
-    jerseyTrim: "#fed7aa",
+    jersey: "#facc15",
+    jerseyTrim: "#fef08a",
   },
 };
 
@@ -125,7 +125,7 @@ function SoccerPlayer({
   const materials = buildMaterials(kitVariant);
   const pose = buildPose(animationState, animationBlend, celebrationLevel);
   const rootPosition = [position[0], position[1] + pose.bodyLift, position[2]];
-  const keeperColor = kitVariant === "secondary" ? "#efb08e" : "#9fd9ff";
+  const keeperColor = kitVariant === "secondary" ? "#fde047" : "#9fd9ff";
 
   return (
     <group name={playerId || "player-one"} position={rootPosition} rotation={rotation}>

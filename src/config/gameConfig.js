@@ -3,6 +3,7 @@ export const GAME_STATES = {
   INTRO: "intro",
   IN_PLAY: "in_play",
   GOAL_SCORED: "goal_scored",
+  KICKOFF: "kickoff",
   PAUSED: "paused",
   ENDED: "ended",
 };
@@ -75,6 +76,12 @@ export const INTRO_CONFIG = {
   CAMERA_END_FOV: 52,
 };
 
+export const KICKOFF_CONFIG = {
+  SPOT_POSITION: [0, 0, 0],
+  RECEIVER_OFFSET_Z: 8,
+  POST_GOAL_DELAY_MS: 550,
+};
+
 export const POWER_PLAY_CONFIG = {
   ZONE_RADIUS: 7,
   SPAWN_DELAY_MS: 12000,
@@ -115,9 +122,111 @@ export const POWER_PLAY_CONFIG = {
   ],
 };
 
-export const TEAM_ONE_PLAYER_IDS = ["player_one", "player_two"];
-export const TEAM_TWO_PLAYER_IDS = ["opponent_one", "opponent_two"];
-export const PLAYER_IDS = [...TEAM_ONE_PLAYER_IDS, ...TEAM_TWO_PLAYER_IDS];
+export const TEAM_IDS = {
+  TEAM_ONE: "teamOne",
+  TEAM_TWO: "teamTwo",
+};
+
+export const PLAYER_ROLES = {
+  STRIKER: "striker",
+  SUPPORT: "support",
+  GOALKEEPER: "goalkeeper",
+};
+
+export const TEAM_ROSTERS = {
+  [TEAM_IDS.TEAM_ONE]: [
+    {
+      playerId: "player_one",
+      label: "Player One",
+      teamId: TEAM_IDS.TEAM_ONE,
+      role: PLAYER_ROLES.STRIKER,
+      homeSlot: "left-forward",
+      attackLane: -1,
+      spawnPosition: [-6, 0, 22],
+      spawnRotation: [0, Math.PI, 0],
+      baseRunSpeed: 34,
+      sprintMultiplier: 1.2,
+      kickPowerMultiplier: 1.25,
+      staminaMax: 100,
+      staminaDrainPerSecSprint: 24,
+      staminaRegenPerSec: 12,
+    },
+    {
+      playerId: "player_two",
+      label: "Player Two",
+      teamId: TEAM_IDS.TEAM_ONE,
+      role: PLAYER_ROLES.SUPPORT,
+      homeSlot: "right-support",
+      attackLane: 1,
+      spawnPosition: [6, 0, 22],
+      spawnRotation: [0, Math.PI, 0],
+      baseRunSpeed: 30,
+      sprintMultiplier: 1.08,
+      kickPowerMultiplier: 1,
+      staminaMax: 100,
+      staminaDrainPerSecSprint: 16,
+      staminaRegenPerSec: 20,
+    },
+  ],
+  [TEAM_IDS.TEAM_TWO]: [
+    {
+      playerId: "opponent_one",
+      label: "Opponent One",
+      teamId: TEAM_IDS.TEAM_TWO,
+      role: PLAYER_ROLES.STRIKER,
+      homeSlot: "left-forward",
+      attackLane: -1,
+      spawnPosition: [-12, 0, -22],
+      spawnRotation: [0, 0, 0],
+      baseRunSpeed: 29,
+      sprintMultiplier: 1.05,
+      kickPowerMultiplier: 1,
+      staminaMax: 100,
+      staminaDrainPerSecSprint: 16,
+      staminaRegenPerSec: 18,
+    },
+    {
+      playerId: "opponent_two",
+      label: "Opponent Two",
+      teamId: TEAM_IDS.TEAM_TWO,
+      role: PLAYER_ROLES.SUPPORT,
+      homeSlot: "right-support",
+      attackLane: 1,
+      spawnPosition: [12, 0, -22],
+      spawnRotation: [0, 0, 0],
+      baseRunSpeed: 31,
+      sprintMultiplier: 1.08,
+      kickPowerMultiplier: 1.05,
+      staminaMax: 100,
+      staminaDrainPerSecSprint: 18,
+      staminaRegenPerSec: 16,
+    },
+  ],
+};
+
+export const GOALKEEPER_PROFILES = {
+  [TEAM_IDS.TEAM_ONE]: {
+    playerId: "keeper-team-one",
+    teamId: TEAM_IDS.TEAM_ONE,
+    role: PLAYER_ROLES.GOALKEEPER,
+    label: "Team One Keeper",
+    spawnPosition: [0, 0, -72.5],
+    spawnRotation: [0, 0, 0],
+  },
+  [TEAM_IDS.TEAM_TWO]: {
+    playerId: "keeper-team-two",
+    teamId: TEAM_IDS.TEAM_TWO,
+    role: PLAYER_ROLES.GOALKEEPER,
+    label: "Team Two Keeper",
+    spawnPosition: [0, 0, 72.5],
+    spawnRotation: [0, Math.PI, 0],
+  },
+};
+
+export const TEAM_ONE_PLAYER_IDS = TEAM_ROSTERS[TEAM_IDS.TEAM_ONE].map((player) => player.playerId);
+export const TEAM_TWO_PLAYER_IDS = TEAM_ROSTERS[TEAM_IDS.TEAM_TWO].map((player) => player.playerId);
+export const OUTFIELD_ROSTER = Object.values(TEAM_ROSTERS).flat();
+export const PLAYER_IDS = OUTFIELD_ROSTER.map((player) => player.playerId);
 
 export const PLAYER_SWITCH_CONFIG = {
   KEY: "Tab",
@@ -138,52 +247,14 @@ export const PLAYER_STAMINA_CONFIG = {
   LOW_KICK_MULTIPLIER: 0.9,
 };
 
-export const PLAYER_PROFILES = {
-  player_one: {
-    label: "Player One",
-    baseRunSpeed: 34,
-    sprintMultiplier: 1.2,
-    kickPowerMultiplier: 1.25,
-    staminaMax: 100,
-    staminaDrainPerSecSprint: 24,
-    staminaRegenPerSec: 12,
-    startPosition: [-6, 0, 22],
-    startRotation: [0, Math.PI, 0],
-  },
-  player_two: {
-    label: "Player Two",
-    baseRunSpeed: 30,
-    sprintMultiplier: 1.08,
-    kickPowerMultiplier: 1,
-    staminaMax: 100,
-    staminaDrainPerSecSprint: 16,
-    staminaRegenPerSec: 20,
-    startPosition: [6, 0, 22],
-    startRotation: [0, Math.PI, 0],
-  },
-  opponent_one: {
-    label: "Opponent One",
-    baseRunSpeed: 29,
-    sprintMultiplier: 1.05,
-    kickPowerMultiplier: 1,
-    staminaMax: 100,
-    staminaDrainPerSecSprint: 16,
-    staminaRegenPerSec: 18,
-    startPosition: [-12, 0, -22],
-    startRotation: [0, 0, 0],
-  },
-  opponent_two: {
-    label: "Opponent Two",
-    baseRunSpeed: 31,
-    sprintMultiplier: 1.08,
-    kickPowerMultiplier: 1.05,
-    staminaMax: 100,
-    staminaDrainPerSecSprint: 18,
-    staminaRegenPerSec: 16,
-    startPosition: [12, 0, -22],
-    startRotation: [0, 0, 0],
-  },
-};
+export const PLAYER_PROFILES = OUTFIELD_ROSTER.reduce((profiles, player) => {
+  profiles[player.playerId] = {
+    ...player,
+    startPosition: [...player.spawnPosition],
+    startRotation: [...player.spawnRotation],
+  };
+  return profiles;
+}, {});
 
 export const DIFFICULTY_PRESETS = {
   easy: {
@@ -191,6 +262,12 @@ export const DIFFICULTY_PRESETS = {
     chaseRange: 58,
     pressureDistance: 12,
     shotChance: 0.32,
+    shotConfidenceThreshold: 0.58,
+    passRiskTolerance: 0.3,
+    pressIntensity: 0.82,
+    supportResponsiveness: 0.9,
+    recoverySpeedMultiplier: 0.92,
+    claimAssertiveness: 0.84,
     maxRunSpeedMultiplier: 0.9,
     keeperReachMultiplier: 0.9,
   },
@@ -199,6 +276,12 @@ export const DIFFICULTY_PRESETS = {
     chaseRange: 68,
     pressureDistance: 15,
     shotChance: 0.48,
+    shotConfidenceThreshold: 0.5,
+    passRiskTolerance: 0.45,
+    pressIntensity: 1,
+    supportResponsiveness: 1,
+    recoverySpeedMultiplier: 1,
+    claimAssertiveness: 1,
     maxRunSpeedMultiplier: 1,
     keeperReachMultiplier: 1,
   },
@@ -207,6 +290,12 @@ export const DIFFICULTY_PRESETS = {
     chaseRange: 78,
     pressureDistance: 18,
     shotChance: 0.65,
+    shotConfidenceThreshold: 0.42,
+    passRiskTolerance: 0.62,
+    pressIntensity: 1.14,
+    supportResponsiveness: 1.1,
+    recoverySpeedMultiplier: 1.08,
+    claimAssertiveness: 1.12,
     maxRunSpeedMultiplier: 1.08,
     keeperReachMultiplier: 1.12,
   },
@@ -216,6 +305,15 @@ export const AI_CONFIG = {
   DEFAULT_DIFFICULTY: "normal",
   UPDATE_INTERVAL_MS: 120,
   SHOOT_DISTANCE: 25,
+  MIN_STATE_DURATION_MS: 320,
+  MAX_PRESSERS: 1,
+  PASS_DISTANCE_MIN: 8,
+  PASS_DISTANCE_MAX: 34,
+  SUPPORT_DISTANCE: 14,
+  RECEIVE_DISTANCE: 18,
+  TACKLE_DISTANCE: 2.6,
+  CARRY_DISTANCE: 8,
+  SHOOT_ANGLE_LIMIT_X: 21,
   RECOVERY_MS: 650,
   INTERCEPT_WEIGHT: 0.78,
   IDLE_HOME_POSITION: [0, 0, -10],
@@ -252,6 +350,11 @@ export const CAMERA_CONFIG = {
   BASE_DISTANCE: 112,
   TRANSITION_ALPHA: 0.08,
   REPLAY_TRANSITION_ALPHA: 0.12,
+  GOAL_REPLAY_ZOOM: {
+    POSITION_SCALE: 0.82,
+    FOV_REDUCTION: 5,
+    MIN_FOV: 36,
+  },
   FOV: {
     BROADCAST_WIDE: 52,
     PLAYER_CHASE: 48,

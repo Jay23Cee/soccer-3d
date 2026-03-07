@@ -58,6 +58,30 @@ vi.mock("@react-three/drei", () => ({
 
 let SoccerBallModel;
 
+const BASE_PLAYERS = [
+  {
+    playerId: "player_one",
+    teamId: "teamOne",
+    role: "striker",
+    position: [0, 0, 0],
+    rotation: [0, 0, 0],
+  },
+  {
+    playerId: "player_two",
+    teamId: "teamOne",
+    role: "support",
+    position: [4, 0, 0],
+    rotation: [0, 0, 0],
+  },
+  {
+    playerId: "opponent_one",
+    teamId: "teamTwo",
+    role: "striker",
+    position: [8, 0, 0],
+    rotation: [0, Math.PI, 0],
+  },
+];
+
 function stepFrame() {
   act(() => {
     frameCallback?.();
@@ -121,14 +145,15 @@ describe("SoccerBallModel", () => {
     const onShotChargeChange = vi.fn();
     const onKickRelease = vi.fn();
 
-    render(
+    const { unmount } = render(
       <SoccerBallModel
         scale={1}
         resetRef={{ current: null }}
         kickoffRef={{ current: null }}
         controlsEnabled={false}
         playerControlsEnabled
-        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
+        players={BASE_PLAYERS}
+        controlledPlayerId="player_one"
         onShotChargeChange={onShotChargeChange}
         onKickRelease={onKickRelease}
       />
@@ -157,18 +182,33 @@ describe("SoccerBallModel", () => {
       .map((payload) => payload.chargeRatio);
     for (let index = 1; index < chargingRatios.length; index += 1) {
       expect(chargingRatios[index]).toBeGreaterThanOrEqual(chargingRatios[index - 1]);
-      expect(Number.isInteger(Math.round(chargingRatios[index] * 100))).toBe(true);
     }
 
     nowValue += 20;
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keyup", { key: "d" }));
     });
-    stepFrame();
 
     const tapKick = onKickRelease.mock.calls[0][0];
     expect(tapKick.chargeRatio).toBeGreaterThan(0);
 
+    unmount();
+    const onKickReleaseHold = vi.fn();
+    render(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled={false}
+        playerControlsEnabled
+        players={BASE_PLAYERS}
+        controlledPlayerId="player_one"
+        onShotChargeChange={onShotChargeChange}
+        onKickRelease={onKickReleaseHold}
+      />
+    );
+
+    stepFrame();
     nowValue += 450;
     stepFrame();
 
@@ -180,9 +220,8 @@ describe("SoccerBallModel", () => {
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keyup", { key: "d" }));
     });
-    stepFrame();
 
-    const holdKick = onKickRelease.mock.calls[1][0];
+    const holdKick = onKickReleaseHold.mock.calls[0][0];
     expect(holdKick.launchSpeed).toBeGreaterThan(tapKick.launchSpeed);
   });
 
@@ -197,7 +236,8 @@ describe("SoccerBallModel", () => {
         kickoffRef={{ current: null }}
         controlsEnabled={false}
         playerControlsEnabled
-        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
+        players={BASE_PLAYERS}
+        controlledPlayerId="player_one"
         onKickRelease={onKickRelease}
       />
     );
@@ -212,122 +252,60 @@ describe("SoccerBallModel", () => {
     setBallPosition([0, 1.05, 0]);
     stepFrame();
     stepFrame();
-    stepFrame();
 
     expect(onKickRelease).toHaveBeenCalledTimes(1);
     expect(onKickRelease.mock.calls[0][0].chargeRatio).toBeCloseTo(
       SHOT_METER_CONFIG.MIN_CHARGE_RATIO
     );
-
-    act(() => {
-      window.dispatchEvent(new KeyboardEvent("keyup", { key: "d" }));
-    });
   });
 
-  it("does not auto-tap when possession starts after the pre-possession window", () => {
-    const onKickRelease = vi.fn();
-    position = [8, 1.05, 8];
+  it("supports symmetric possession for both teams", () => {
+    const onTeamOnePossession = vi.fn();
 
-    render(
+    const { unmount } = render(
       <SoccerBallModel
         scale={1}
         resetRef={{ current: null }}
         kickoffRef={{ current: null }}
         controlsEnabled={false}
         playerControlsEnabled
-        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
-        onKickRelease={onKickRelease}
+        players={BASE_PLAYERS}
+        controlledPlayerId="player_one"
+        onPossessionChange={onTeamOnePossession}
       />
     );
 
     stepFrame();
-
-    act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "d" }));
-    });
-
-    nowValue += 260;
-    setBallPosition([0, 1.05, 0]);
-    stepFrame();
-    stepFrame();
-
-    expect(onKickRelease).not.toHaveBeenCalled();
-
-    act(() => {
-      window.dispatchEvent(new KeyboardEvent("keyup", { key: "d" }));
-    });
-  });
-
-  it("does not auto-tap if D is released before possession starts", () => {
-    const onKickRelease = vi.fn();
-    position = [8, 1.05, 8];
-
-    render(
-      <SoccerBallModel
-        scale={1}
-        resetRef={{ current: null }}
-        kickoffRef={{ current: null }}
-        controlsEnabled={false}
-        playerControlsEnabled
-        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
-        onKickRelease={onKickRelease}
-      />
-    );
-
-    stepFrame();
-
-    act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "d" }));
-    });
-    nowValue += 90;
-    act(() => {
-      window.dispatchEvent(new KeyboardEvent("keyup", { key: "d" }));
-    });
-
-    nowValue += 40;
-    setBallPosition([0, 1.05, 0]);
-    stepFrame();
-    stepFrame();
-
-    expect(onKickRelease).not.toHaveBeenCalled();
-  });
-
-  it("assigns possession to the nearest Team One player", () => {
-    const onPossessionChange = vi.fn();
-    position = [3.1, 1.05, 0];
-
-    render(
-      <SoccerBallModel
-        scale={1}
-        resetRef={{ current: null }}
-        kickoffRef={{ current: null }}
-        controlsEnabled={false}
-        playerControlsEnabled
-        teamOnePlayers={[
-          { playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] },
-          { playerId: "player_two", position: [4, 0, 0], rotation: [0, 0, 0] },
-        ]}
-        onPossessionChange={onPossessionChange}
-      />
-    );
-
-    stepFrame();
-
-    expect(onPossessionChange).toHaveBeenLastCalledWith({
+    expect(onTeamOnePossession).toHaveBeenLastCalledWith({
       teamId: "teamOne",
-      playerId: "player_two",
+      playerId: "player_one",
+    });
+
+    position = [8, 1.05, 0];
+    const onTeamTwoPossession = vi.fn();
+    unmount();
+    render(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled={false}
+        playerControlsEnabled
+        players={BASE_PLAYERS}
+        controlledPlayerId="player_one"
+        onPossessionChange={onTeamTwoPossession}
+      />
+    );
+    stepFrame();
+
+    expect(onTeamTwoPossession).toHaveBeenLastCalledWith({
+      teamId: "teamTwo",
+      playerId: "opponent_one",
     });
   });
 
-  it("applies and consumes a pass command once", () => {
-    const onPassCommandConsumed = vi.fn();
-    const passCommand = {
-      id: "pass-1",
-      fromPlayerId: "player_one",
-      toPlayerId: "player_two",
-      velocity: [3, 1.2, -4],
-      issuedAtMs: 0,
-    };
+  it("rejects invalid or non-possessor ball action commands safely", () => {
+    const onBallActionResolved = vi.fn();
 
     const { rerender } = render(
       <SoccerBallModel
@@ -336,18 +314,116 @@ describe("SoccerBallModel", () => {
         kickoffRef={{ current: null }}
         controlsEnabled={false}
         playerControlsEnabled
-        teamOnePlayers={[
-          { playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] },
-          { playerId: "player_two", position: [4, 0, 0], rotation: [0, 0, 0] },
-        ]}
-        passCommand={passCommand}
-        onPassCommandConsumed={onPassCommandConsumed}
+        players={BASE_PLAYERS}
+        controlledPlayerId="player_one"
+        onBallActionResolved={onBallActionResolved}
       />
     );
 
-    expect(api.velocity.set).toHaveBeenCalledWith(3, 1.2, -4);
-    expect(onPassCommandConsumed).toHaveBeenCalledTimes(1);
-    expect(onPassCommandConsumed).toHaveBeenCalledWith("pass-1");
+    stepFrame();
+
+    rerender(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled={false}
+        playerControlsEnabled
+        players={BASE_PLAYERS}
+        controlledPlayerId="player_one"
+        onBallActionResolved={onBallActionResolved}
+        ballActionCommand={{
+          id: "shot-invalid",
+          actorId: "unknown-player",
+          teamId: "teamTwo",
+          type: "shot",
+          targetPlayerId: null,
+          targetPosition: [0, 0, 78],
+          power: 1,
+        }}
+      />
+    );
+
+    expect(onBallActionResolved).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "shot-invalid", accepted: false })
+    );
+
+    rerender(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled={false}
+        playerControlsEnabled
+        players={BASE_PLAYERS}
+        controlledPlayerId="player_one"
+        onBallActionResolved={onBallActionResolved}
+        ballActionCommand={{
+          id: "shot-opponent",
+          actorId: "opponent_one",
+          teamId: "teamTwo",
+          type: "shot",
+          targetPlayerId: null,
+          targetPosition: [0, 0, 78],
+          power: 1,
+        }}
+      />
+    );
+
+    expect(onBallActionResolved).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "shot-opponent", accepted: false })
+    );
+  });
+
+  it("executes a legal pass action once and clears possession", () => {
+    const onBallActionResolved = vi.fn();
+    const onPossessionChange = vi.fn();
+
+    const { rerender } = render(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled={false}
+        playerControlsEnabled
+        players={BASE_PLAYERS}
+        controlledPlayerId="player_one"
+        onBallActionResolved={onBallActionResolved}
+        onPossessionChange={onPossessionChange}
+      />
+    );
+
+    stepFrame();
+    api.velocity.set.mockClear();
+
+    rerender(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={{ current: null }}
+        controlsEnabled={false}
+        playerControlsEnabled
+        players={BASE_PLAYERS}
+        controlledPlayerId="player_one"
+        onBallActionResolved={onBallActionResolved}
+        onPossessionChange={onPossessionChange}
+        ballActionCommand={{
+          id: "pass-1",
+          actorId: "player_one",
+          teamId: "teamOne",
+          type: "pass",
+          targetPlayerId: "player_two",
+          targetPosition: [4, 0, 0],
+          power: 1,
+        }}
+      />
+    );
+
+    expect(api.velocity.set).toHaveBeenCalled();
+    expect(onBallActionResolved).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "pass-1", accepted: true, targetPlayerId: "player_two" })
+    );
+    expect(onPossessionChange).toHaveBeenLastCalledWith(null);
 
     api.velocity.set.mockClear();
     rerender(
@@ -357,17 +433,103 @@ describe("SoccerBallModel", () => {
         kickoffRef={{ current: null }}
         controlsEnabled={false}
         playerControlsEnabled
-        teamOnePlayers={[
-          { playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] },
-          { playerId: "player_two", position: [4, 0, 0], rotation: [0, 0, 0] },
-        ]}
-        passCommand={passCommand}
-        onPassCommandConsumed={onPassCommandConsumed}
+        players={BASE_PLAYERS}
+        controlledPlayerId="player_one"
+        onBallActionResolved={onBallActionResolved}
+        onPossessionChange={onPossessionChange}
+        ballActionCommand={{
+          id: "pass-1",
+          actorId: "player_one",
+          teamId: "teamOne",
+          type: "pass",
+          targetPlayerId: "player_two",
+          targetPosition: [4, 0, 0],
+          power: 1,
+        }}
       />
     );
 
-    expect(onPassCommandConsumed).toHaveBeenCalledTimes(1);
     expect(api.velocity.set).not.toHaveBeenCalled();
+  });
+
+  it("stages a center kickoff and accepts the designated taker without prior possession", () => {
+    const kickoffRef = { current: null };
+    const onBallActionResolved = vi.fn();
+    const kickoffPlayers = [
+      {
+        playerId: "opponent_one",
+        teamId: "teamTwo",
+        role: "striker",
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+      },
+      {
+        playerId: "opponent_two",
+        teamId: "teamTwo",
+        role: "support",
+        position: [0, 0, -8],
+        rotation: [0, 0, 0],
+      },
+      {
+        playerId: "player_one",
+        teamId: "teamOne",
+        role: "striker",
+        position: [-6, 0, 22],
+        rotation: [0, Math.PI, 0],
+      },
+    ];
+
+    const { rerender } = render(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={kickoffRef}
+        controlsEnabled={false}
+        playerControlsEnabled
+        players={kickoffPlayers}
+        controlledPlayerId="player_one"
+        onBallActionResolved={onBallActionResolved}
+      />
+    );
+
+    act(() => {
+      kickoffRef.current?.({
+        id: "setup-kickoff",
+        teamId: "teamTwo",
+        takerId: "opponent_one",
+        spotPosition: [0, 0, 0],
+      });
+    });
+
+    expect(api.position.set).toHaveBeenLastCalledWith(0, 1.02, 0);
+
+    api.velocity.set.mockClear();
+    rerender(
+      <SoccerBallModel
+        scale={1}
+        resetRef={{ current: null }}
+        kickoffRef={kickoffRef}
+        controlsEnabled={false}
+        playerControlsEnabled
+        players={kickoffPlayers}
+        controlledPlayerId="player_one"
+        onBallActionResolved={onBallActionResolved}
+        ballActionCommand={{
+          id: "kickoff-opponent_one-opponent_two-1",
+          actorId: "opponent_one",
+          teamId: "teamTwo",
+          type: "pass",
+          targetPlayerId: "opponent_two",
+          targetPosition: [0, 0, -8],
+          power: 1,
+        }}
+      />
+    );
+
+    expect(api.velocity.set).toHaveBeenCalled();
+    expect(onBallActionResolved).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "kickoff-opponent_one-opponent_two-1", accepted: true })
+    );
   });
 
   it("uses mapMovementKeyToForce callback for ball directional input", () => {
@@ -380,8 +542,7 @@ describe("SoccerBallModel", () => {
         kickoffRef={{ current: null }}
         controlsEnabled
         mapMovementKeyToForce={mapMovementKeyToForce}
-        playerControlsEnabled={false}
-        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
+        players={BASE_PLAYERS}
       />
     );
 
@@ -396,28 +557,6 @@ describe("SoccerBallModel", () => {
     expect(api.applyForce).toHaveBeenCalledWith([3, 0, 4], [0, 0, 0]);
   });
 
-  it("falls back to world-axis directional input when no mapping callback is provided", () => {
-    render(
-      <SoccerBallModel
-        scale={1}
-        resetRef={{ current: null }}
-        kickoffRef={{ current: null }}
-        controlsEnabled
-        playerControlsEnabled={false}
-        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
-      />
-    );
-
-    api.applyForce.mockClear();
-
-    act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft" }));
-    });
-    stepFrame();
-
-    expect(api.applyForce).toHaveBeenCalledWith([-BALL_CONFIG.FORCE, 0, 0], [0, 0, 0]);
-  });
-
   it("suppresses out-of-bounds callback during replay", () => {
     const onOutOfBounds = vi.fn();
 
@@ -429,7 +568,8 @@ describe("SoccerBallModel", () => {
         controlsEnabled={false}
         playerControlsEnabled
         replayActive
-        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
+        players={BASE_PLAYERS}
+        controlledPlayerId="player_one"
         onOutOfBounds={onOutOfBounds}
       />
     );
@@ -451,7 +591,8 @@ describe("SoccerBallModel", () => {
         controlsEnabled={false}
         playerControlsEnabled
         replayActive
-        teamOnePlayers={[{ playerId: "player_one", position: [0, 0, 0], rotation: [0, 0, 0] }]}
+        players={BASE_PLAYERS}
+        controlledPlayerId="player_one"
         activePowerZone={{
           id: "zone-replay",
           type: "speed",

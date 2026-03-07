@@ -43,6 +43,14 @@ function createMockCamera() {
   };
 }
 
+function latestCameraState(spy) {
+  return spy.mock.calls.at(-1)?.[0] || null;
+}
+
+function distanceBetween(a, b) {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+
 describe("CameraDirector", () => {
   it("throttles camera state emission to roughly 100ms", () => {
     const onCameraStateChange = vi.fn();
@@ -95,6 +103,115 @@ describe("CameraDirector", () => {
 
     expect(onCameraStateChange).toHaveBeenCalledTimes(1);
     expect(onCameraStateChange.mock.calls[0][0].mode).toBe(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
+  });
+
+  it("applies tighter framing during goal replays", () => {
+    const saveReplayStateChange = vi.fn();
+    const saveReplayCamera = createMockCamera();
+    const saveReplayRender = render(
+      <CameraDirector
+        cameraRef={{ current: saveReplayCamera }}
+        mode={CAMERA_CONFIG.MODES.BROADCAST_WIDE}
+        ballPosition={[8, 1, -12]}
+        playerPositions={[[0, 0, 0], [18, 0, 12]]}
+        goalkeeperPositions={[[0, 0, -70], [0, 0, 70]]}
+        replayFrame={{ ball: { position: [8, 1, -12] } }}
+        isReplay
+        replayEventType="save"
+        introProgress={0}
+        gameState="in_play"
+        onCameraStateChange={saveReplayStateChange}
+      />
+    );
+
+    for (let step = 0; step < 30; step += 1) {
+      tickFrame(0.2 + step * 0.05);
+    }
+
+    const saveReplayState = latestCameraState(saveReplayStateChange);
+    saveReplayRender.unmount();
+
+    const goalReplayStateChange = vi.fn();
+    const goalReplayCamera = createMockCamera();
+    render(
+      <CameraDirector
+        cameraRef={{ current: goalReplayCamera }}
+        mode={CAMERA_CONFIG.MODES.BROADCAST_WIDE}
+        ballPosition={[8, 1, -12]}
+        playerPositions={[[0, 0, 0], [18, 0, 12]]}
+        goalkeeperPositions={[[0, 0, -70], [0, 0, 70]]}
+        replayFrame={{ ball: { position: [8, 1, -12] } }}
+        isReplay
+        replayEventType="goal"
+        introProgress={0}
+        gameState="in_play"
+        onCameraStateChange={goalReplayStateChange}
+      />
+    );
+
+    for (let step = 0; step < 30; step += 1) {
+      tickFrame(2 + step * 0.05);
+    }
+
+    const goalReplayState = latestCameraState(goalReplayStateChange);
+    expect(goalReplayState.fov).toBeLessThan(saveReplayState.fov);
+    expect(distanceBetween(goalReplayState.position, goalReplayState.target)).toBeLessThan(
+      distanceBetween(saveReplayState.position, saveReplayState.target)
+    );
+  });
+
+  it("keeps non-goal replays on the existing framing", () => {
+    const baselineReplayStateChange = vi.fn();
+    const baselineReplayCamera = createMockCamera();
+    const baselineReplayRender = render(
+      <CameraDirector
+        cameraRef={{ current: baselineReplayCamera }}
+        mode={CAMERA_CONFIG.MODES.BROADCAST_WIDE}
+        ballPosition={[8, 1, -12]}
+        playerPositions={[[0, 0, 0], [18, 0, 12]]}
+        goalkeeperPositions={[[0, 0, -70], [0, 0, 70]]}
+        replayFrame={{ ball: { position: [8, 1, -12] } }}
+        isReplay
+        introProgress={0}
+        gameState="in_play"
+        onCameraStateChange={baselineReplayStateChange}
+      />
+    );
+
+    for (let step = 0; step < 30; step += 1) {
+      tickFrame(0.2 + step * 0.05);
+    }
+
+    const baselineReplayState = latestCameraState(baselineReplayStateChange);
+    baselineReplayRender.unmount();
+
+    const saveReplayStateChange = vi.fn();
+    const saveReplayCamera = createMockCamera();
+    render(
+      <CameraDirector
+        cameraRef={{ current: saveReplayCamera }}
+        mode={CAMERA_CONFIG.MODES.BROADCAST_WIDE}
+        ballPosition={[8, 1, -12]}
+        playerPositions={[[0, 0, 0], [18, 0, 12]]}
+        goalkeeperPositions={[[0, 0, -70], [0, 0, 70]]}
+        replayFrame={{ ball: { position: [8, 1, -12] } }}
+        isReplay
+        replayEventType="save"
+        introProgress={0}
+        gameState="in_play"
+        onCameraStateChange={saveReplayStateChange}
+      />
+    );
+
+    for (let step = 0; step < 30; step += 1) {
+      tickFrame(2 + step * 0.05);
+    }
+
+    const saveReplayState = latestCameraState(saveReplayStateChange);
+    expect(saveReplayState.fov).toBeCloseTo(baselineReplayState.fov, 4);
+    expect(saveReplayState.position[0]).toBeCloseTo(baselineReplayState.position[0], 1);
+    expect(saveReplayState.position[1]).toBeCloseTo(baselineReplayState.position[1], 1);
+    expect(saveReplayState.position[2]).toBeCloseTo(baselineReplayState.position[2], 1);
   });
 
   it("does not force camera position while in free roam mode", () => {

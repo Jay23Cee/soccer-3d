@@ -76,7 +76,7 @@ describe("SoccerPlayer", () => {
       (child) => child?.type === "meshStandardMaterial"
     );
 
-    expect(torsoMaterial.props.color).toBe("#f97316");
+    expect(torsoMaterial.props.color).toBe("#facc15");
   });
 
   it("renders an active marker when isActive is true", () => {

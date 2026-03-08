@@ -4,19 +4,20 @@ import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import { BALL_BODY_NAME, GOAL_CONFIG } from "./config/gameConfig";
 
-function GoalNet({ position, scale, rotation, onGoal, goalId, active }) {
+function GoalNet({ position, scale, rotation, onGoal, goalId, goalSide, active }) {
   const { scene } = useGLTF("/goalnet.gltf");
   const triggerLockRef = useRef(0);
   const activeRef = useRef(active);
   const onGoalRef = useRef(onGoal);
-  const goalIdRef = useRef(goalId);
+  const goalSideRef = useRef(goalSide);
   const goalScene = useMemo(() => scene.clone(), [scene]);
   const [positionX = 0, positionY = 0, positionZ = 0] = position;
   const [rotationX = 0, rotationY = 0, rotationZ = 0] = rotation;
 
   activeRef.current = active;
   onGoalRef.current = onGoal;
-  goalIdRef.current = goalId;
+  goalSideRef.current =
+    goalSide || (positionZ < 0 ? "negativeZ" : "positiveZ");
 
   const triggerPosition = useMemo(() => {
     const localDepthOffset = -0.105 * scale;
@@ -75,7 +76,7 @@ function GoalNet({ position, scale, rotation, onGoal, goalId, active }) {
       }
 
       triggerLockRef.current = now + GOAL_CONFIG.TRIGGER_DEBOUNCE_MS;
-      onGoalRef.current?.(goalIdRef.current);
+      onGoalRef.current?.(goalSideRef.current);
     },
   }), undefined, [
     triggerPosition[0],
@@ -100,7 +101,7 @@ function GoalNet({ position, scale, rotation, onGoal, goalId, active }) {
   }, [goalScene]);
 
   return (
-    <group position={position} rotation={rotation}>
+    <group position={position} rotation={rotation} userData={{ goalId }}>
       <primitive object={goalScene} scale={scale} castShadow receiveShadow />
       <group />
       <mesh visible={false} />

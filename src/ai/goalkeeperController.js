@@ -5,6 +5,7 @@ import {
   AI_CONFIG,
   GOALKEEPER_PROFILES,
 } from "../config/gameConfig";
+import { createGoalkeeperHomeState } from "../match/teamDirections";
 
 export const GOALKEEPER_STATES = {
   IDLE: "idle",
@@ -39,26 +40,34 @@ function difficultyConfig(difficulty) {
   return DIFFICULTY_PRESETS[difficulty] || DIFFICULTY_PRESETS[AI_CONFIG.DEFAULT_DIFFICULTY];
 }
 
-function homePositionForTeam(teamId) {
-  const profile = GOALKEEPER_PROFILES[teamId];
-  if (profile?.spawnPosition) {
-    return [...profile.spawnPosition];
-  }
-
-  const z = teamId === "teamOne" ? -GOALKEEPER_CONFIG.HOME_DEPTH : GOALKEEPER_CONFIG.HOME_DEPTH;
-  return [0, 0, z];
+function buildDistributionImpulse(goalDirectionSign) {
+  return [
+    goalDirectionSign > 0 ? -0.2 : 0.2,
+    0.15,
+    goalDirectionSign > 0
+      ? -GOALKEEPER_CONFIG.DISTRIBUTE_IMPULSE
+      : GOALKEEPER_CONFIG.DISTRIBUTE_IMPULSE,
+  ];
 }
 
-export function createInitialGoalkeeperState(teamId) {
+function homeStateForTeam(teamId, teamAttackDirections) {
+  return createGoalkeeperHomeState(teamId, teamAttackDirections);
+}
+
+export function createInitialGoalkeeperState(teamId, options = {}) {
   const profile = GOALKEEPER_PROFILES[teamId] || null;
+  const homeState = homeStateForTeam(teamId, options.teamAttackDirections);
   return {
     teamId,
     playerId: profile?.playerId || `keeper-${teamId}`,
     mode: GOALKEEPER_STATES.IDLE,
-    position: homePositionForTeam(teamId),
-    rotation: profile?.spawnRotation || [0, teamId === "teamOne" ? 0 : Math.PI, 0],
+    homePosition: [...homeState.position],
+    homeRotation: [...homeState.rotation],
+    position: [...homeState.position],
+    rotation: [...homeState.rotation],
     saveCooldownUntilMs: 0,
     distributeUntilMs: 0,
+    distributionReleaseAtMs: 0,
   };
 }
 
@@ -66,18 +75,28 @@ export function updateGoalkeeperController({
   nowMs,
   deltaSeconds,
   difficulty = AI_CONFIG.DEFAULT_DIFFICULTY,
+  aiPaceMultiplier = 1,
   keeperState,
   ballSnapshot,
+  teamAttackDirections,
 }) {
   const config = difficultyConfig(difficulty);
-  const currentState = keeperState || createInitialGoalkeeperState("teamOne");
-  const home = homePositionForTeam(currentState.teamId);
+  const currentState =
+    keeperState || createInitialGoalkeeperState("teamOne", { teamAttackDirections });
+  const homeState = homeStateForTeam(currentState.teamId, teamAttackDirections);
+  const home = Array.isArray(currentState.homePosition)
+    ? [...currentState.homePosition]
+    : [...homeState.position];
+  const homeRotation = Array.isArray(currentState.homeRotation)
+    ? [...currentState.homeRotation]
+    : [...homeState.rotation];
   const currentPosition = currentState.position || home;
-  const currentRotation = currentState.rotation || [0, 0, 0];
+  const currentRotation = currentState.rotation || homeRotation;
   const ballPosition = ballSnapshot?.position || [0, 0, 0];
   const ballVelocity = ballSnapshot?.velocity || [0, 0, 0];
-  const isTeamOne = currentState.teamId === "teamOne";
-  const goalDirectionSign = isTeamOne ? -1 : 1;
+  const keeperHasPossession =
+    ballSnapshot?.mode === "attached" && ballSnapshot?.possession?.playerId === currentState.playerId;
+  const goalDirectionSign = home[2] >= 0 ? 1 : -1;
   const towardGoalSpeed = ballVelocity[2] * goalDirectionSign;
   const ballDepthDelta = Math.abs(ballPosition[2] - home[2]);
   const ballDistance = distance2D(currentPosition, ballPosition);
@@ -87,12 +106,26 @@ export function updateGoalkeeperController({
   let mode = currentState.mode || GOALKEEPER_STATES.IDLE;
   let nextTarget = [...home];
   let saveRequested = false;
+  let distributionRequested = false;
   let distributeImpulse = null;
   let saveCooldownUntilMs = currentState.saveCooldownUntilMs || 0;
   let distributeUntilMs = currentState.distributeUntilMs || 0;
+  let distributionReleaseAtMs = keeperHasPossession
+    ? currentState.distributionReleaseAtMs || 0
+    : 0;
 
   if (!ballSnapshot) {
     mode = GOALKEEPER_STATES.IDLE;
+  } else if (keeperHasPossession) {
+    mode = GOALKEEPER_STATES.DISTRIBUTE;
+    nextTarget = [...home];
+    if (distributionReleaseAtMs <= 0) {
+      distributionReleaseAtMs = nowMs + GOALKEEPER_CONFIG.POSSESSION_HOLD_MS;
+    } else if (nowMs >= distributionReleaseAtMs) {
+      distributionRequested = true;
+      distributeImpulse = buildDistributionImpulse(goalDirectionSign);
+      distributionReleaseAtMs = nowMs + GOALKEEPER_CONFIG.RESET_MS;
+    }
   } else if (mode === GOALKEEPER_STATES.DISTRIBUTE && nowMs < distributeUntilMs) {
     mode = GOALKEEPER_STATES.DISTRIBUTE;
     nextTarget = [...home];
@@ -113,14 +146,12 @@ export function updateGoalkeeperController({
   switch (mode) {
     case GOALKEEPER_STATES.SAVE: {
       saveRequested = true;
+      distributionRequested = true;
       saveCooldownUntilMs = nowMs + GOALKEEPER_CONFIG.SAVE_COOLDOWN_MS;
       distributeUntilMs = nowMs + GOALKEEPER_CONFIG.RESET_MS;
+      distributionReleaseAtMs = 0;
       mode = GOALKEEPER_STATES.DISTRIBUTE;
-      distributeImpulse = [
-        (isTeamOne ? 1 : -1) * 0.2,
-        0.15,
-        isTeamOne ? GOALKEEPER_CONFIG.DISTRIBUTE_IMPULSE : -GOALKEEPER_CONFIG.DISTRIBUTE_IMPULSE,
-      ];
+      distributeImpulse = buildDistributionImpulse(goalDirectionSign);
       nextTarget = [...home];
       break;
     }
@@ -148,7 +179,8 @@ export function updateGoalkeeperController({
   }
 
   const direction = normalize2D([nextTarget[0] - currentPosition[0], nextTarget[2] - currentPosition[2]]);
-  const keeperSpeed = 17 * config.maxRunSpeedMultiplier;
+  const resolvedAiPaceMultiplier = Number.isFinite(aiPaceMultiplier) ? aiPaceMultiplier : 1;
+  const keeperSpeed = 17 * config.maxRunSpeedMultiplier * resolvedAiPaceMultiplier;
   const nextPosition = [
     clamp(
       currentPosition[0] + direction[0] * keeperSpeed * deltaSeconds,
@@ -167,12 +199,16 @@ export function updateGoalkeeperController({
   return {
     ...currentState,
     mode,
+    homePosition: [...home],
+    homeRotation: [...homeRotation],
     targetPosition: nextTarget,
     position: nextPosition,
     rotation: [0, Number.isFinite(nextYaw) ? nextYaw : currentRotation[1], 0],
     saveRequested,
+    distributionRequested,
     distributeImpulse,
     saveCooldownUntilMs,
     distributeUntilMs,
+    distributionReleaseAtMs,
   };
 }

@@ -4,7 +4,9 @@ import { vi } from "vitest";
 import {
   BALL_RESET_DELAY_MS,
   CAMERA_CONFIG,
+  GOALKEEPER_CONFIG,
   KICKOFF_CONFIG,
+  MATCH_DURATION_SECONDS,
   PLAYER_PROFILES,
 } from "./config/gameConfig";
 
@@ -47,7 +49,13 @@ vi.mock(
 
 vi.mock("./camera/CameraDirector", () => ({ default: () => null }));
 vi.mock("./SoccerField", () => ({ default: () => <div data-testid="soccer-field" /> }));
-vi.mock("./hooks/useOutfieldAI", () => ({ default: () => null }));
+let latestOutfieldAiProps = null;
+vi.mock("./hooks/useOutfieldAI", () => ({
+  default: (props) => {
+    latestOutfieldAiProps = props;
+    return null;
+  },
+}));
 vi.mock("./hooks/useGoalkeeperAI", () => ({ default: () => null }));
 let replayStateOverride = null;
 let replayFrameOverride = null;
@@ -78,18 +86,55 @@ vi.mock("./hooks/useReplayOrchestration", () => ({
 let mockSnapshotTime = 0;
 vi.mock("./SoccerBallModel", () => ({
   default: ({
+    resetRef,
     kickoffRef,
     onPowerZoneEnter,
     onShotChargeChange,
     onShotEvent,
     onPossessionChange,
     onBallSnapshot,
+    onOutOfBounds,
     ballActionCommand,
     onBallActionResolved,
+    tackleCommand,
+    onTackleResolved,
     shotPowerMultiplier,
+    players = [],
   }) => {
       const [kickoffSetup, setKickoffSetup] = React.useState(null);
       const lastAutoResolvedKickoffIdRef = React.useRef(null);
+      const emitAttachedPossession = (teamId, playerId) => {
+        const actor = players.find((candidate) => candidate.playerId === playerId);
+        const actorPosition = actor?.position || [0, 0, 0];
+
+        onPossessionChange?.({ teamId, playerId });
+        mockSnapshotTime += 34;
+        onBallSnapshot?.({
+          timestampMs: mockSnapshotTime,
+          position: [actorPosition[0], 1.1, actorPosition[2]],
+          velocity: [0, 0, 0],
+          mode: "attached",
+          possession: {
+            teamId,
+            playerId,
+          },
+        });
+      };
+
+      React.useEffect(() => {
+        if (!resetRef) {
+          return undefined;
+        }
+
+        const resetHandler = () => {};
+        resetRef.current = resetHandler;
+
+        return () => {
+          if (resetRef?.current === resetHandler) {
+            resetRef.current = null;
+          }
+        };
+      }, [resetRef]);
 
       React.useEffect(() => {
         if (!kickoffRef) {
@@ -197,6 +242,20 @@ vi.mock("./SoccerBallModel", () => ({
         </button>
         <button
           type="button"
+          data-testid="mock-opponent-possession"
+          onClick={() => onPossessionChange?.({ teamId: "teamTwo", playerId: "opponent_one" })}
+        >
+          mock-opponent-possession
+        </button>
+        <button
+          type="button"
+          data-testid="mock-keeper-possession"
+          onClick={() => emitAttachedPossession("teamOne", "keeper-team-one")}
+        >
+          mock-keeper-possession
+        </button>
+        <button
+          type="button"
           data-testid="mock-snapshot"
           onClick={() => {
             mockSnapshotTime += 34;
@@ -204,10 +263,66 @@ vi.mock("./SoccerBallModel", () => ({
               timestampMs: mockSnapshotTime,
               position: [0, 1.1, 0],
               velocity: [0, 0, -4],
+              mode: "loose",
+              possession: null,
             });
           }}
         >
           mock-snapshot
+        </button>
+        <button
+          type="button"
+          data-testid="mock-out-throw-in"
+          onClick={() =>
+            onOutOfBounds?.({
+              position: [74, 1, 14],
+              velocity: [0, 0, 0],
+              mode: "released",
+              possession: null,
+              lastTouch: {
+                teamId: "teamOne",
+                playerId: "player_one",
+              },
+            })
+          }
+        >
+          mock-out-throw-in
+        </button>
+        <button
+          type="button"
+          data-testid="mock-out-goal-kick"
+          onClick={() =>
+            onOutOfBounds?.({
+              position: [8, 1, 88],
+              velocity: [0, 0, 0],
+              mode: "released",
+              possession: null,
+              lastTouch: {
+                teamId: "teamTwo",
+                playerId: "opponent_one",
+              },
+            })
+          }
+        >
+          mock-out-goal-kick
+        </button>
+        <button
+          type="button"
+          data-testid="mock-out-corner"
+          onClick={() =>
+            onOutOfBounds?.({
+              position: [-6, 1, -88],
+              velocity: [0, 0, 0],
+              mode: "released",
+              possession: null,
+              lastTouch: {
+                teamId: "teamTwo",
+                playerId: "opponent_one",
+              },
+            })
+          }
+        >
+          mock-out-corner
         </button>
         <button
           type="button"
@@ -230,7 +345,28 @@ vi.mock("./SoccerBallModel", () => ({
         >
           resolve-ball-action
         </button>
+        <button
+          type="button"
+          data-testid="resolve-tackle"
+          onClick={() => {
+            if (!tackleCommand) {
+              return;
+            }
+
+            onPossessionChange?.(null);
+            onTackleResolved?.({
+              id: tackleCommand.id,
+              accepted: true,
+              actorId: tackleCommand.actorId,
+              teamId: tackleCommand.teamId,
+              carrierId: tackleCommand.carrierId || null,
+            });
+          }}
+        >
+          resolve-tackle
+        </button>
         <div data-testid="ball-action-command">{ballActionCommand?.id || ""}</div>
+        <div data-testid="tackle-command">{tackleCommand?.id || ""}</div>
         <div data-testid="kickoff-setup">{kickoffSetup ? JSON.stringify(kickoffSetup) : ""}</div>
       </div>
     );
@@ -247,11 +383,13 @@ vi.mock("./SoccerPlayer", () => ({
   ),
 }));
 vi.mock("./GoalNet", () => ({
-  default: ({ goalId, onGoal, active }) => (
+  default: ({ goalId, goalSide, onGoal, active }) => (
     <button
       type="button"
       data-testid={`goal-${goalId}`}
-      onClick={() => onGoal(goalId)}
+      data-goal-id={goalId}
+      data-goal-side={goalSide === "negativeZ" ? "negative-z" : "positive-z"}
+      onClick={() => onGoal(goalSide || goalId)}
       disabled={!active}
     >
       goal-{goalId}
@@ -267,10 +405,13 @@ beforeAll(async () => {
 
 beforeEach(() => {
   mockSnapshotTime = 0;
+  latestOutfieldAiProps = null;
   replayStateOverride = null;
   replayFrameOverride = null;
   replayHookControls = null;
   autoResolveKickoffCommands = true;
+  delete window.__SOCCER_E2E__;
+  delete window.__SOCCER_TEST_API__;
 });
 
 function startAndSkipIntro() {
@@ -292,10 +433,48 @@ function getMockPlayer(playerId) {
     .find((playerNode) => playerNode.dataset.playerId === playerId);
 }
 
+function getMockKeeper(playerId) {
+  return screen
+    .getAllByTestId("soccer-keeper")
+    .find((playerNode) => playerNode.dataset.playerId === playerId);
+}
+
 function seedReplayBuffer(frameCount = 10) {
   for (let index = 0; index < frameCount; index += 1) {
     fireEvent.click(screen.getByTestId("mock-snapshot"));
   }
+}
+
+function primeCpuAutomationState() {
+  act(() => {
+    latestOutfieldAiProps.teamAttackMemoryRef.current = {
+      teamOne: {
+        possessionStartMs: null,
+        ballZone: "midfield",
+        actionLocks: {},
+      },
+      teamTwo: {
+        possessionStartMs: 2_400,
+        ballZone: "attacking_third",
+        actionLocks: {
+          opponent_one: {
+            mode: "carry",
+            expiresAtMs: 99_999,
+          },
+        },
+      },
+    };
+
+    latestOutfieldAiProps.setBallActionCommand({
+      id: "cpu-shot-opponent_one-seeded",
+      actorId: "opponent_one",
+      teamId: "teamTwo",
+      type: "shot",
+      targetPlayerId: null,
+      targetPosition: [6, 0, 78],
+      power: 1.2,
+    });
+  });
 }
 
 describe("App", () => {
@@ -304,6 +483,8 @@ describe("App", () => {
 
     expect(screen.getByText("Soccer 3D")).toBeInTheDocument();
     expect(screen.getByText("Status: Idle")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start Match" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Options" })).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByText("Match Story")).toBeInTheDocument();
     expect(screen.getByTestId("replay-state")).toHaveTextContent("idle");
     expect(screen.getAllByTestId("soccer-player")).toHaveLength(4);
@@ -330,44 +511,90 @@ describe("App", () => {
   test("shows six soccer camera POV options in the menu", () => {
     render(<App />);
 
-    const povSelect = screen.getByLabelText("Camera POV");
-    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
-
-    const optionLabels = Array.from(povSelect.querySelectorAll("option")).map((option) =>
-      option.textContent?.trim()
+    const freeRoamButton = screen.getByRole("button", { name: "Free Roam" });
+    expect(screen.getByRole("button", { name: "Broadcast Wide" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
     );
 
-    expect(optionLabels).toEqual([
-      "Broadcast Wide",
-      "Player Chase",
-      "Behind Player (West of Ball)",
-      "Attacking Third",
-      "Goal Line",
-      "Free Roam",
-    ]);
+    fireEvent.click(freeRoamButton);
 
-    fireEvent.change(povSelect, { target: { value: CAMERA_CONFIG.MODES.FREE_ROAM } });
-    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.FREE_ROAM);
+    expect(freeRoamButton).toHaveAttribute("aria-pressed", "true");
   });
 
   test("shows movement mapping select with Auto default", () => {
     render(<App />);
 
+    fireEvent.click(screen.getByRole("button", { name: "Options" }));
     const mappingSelect = screen.getByLabelText("Movement Mapping");
     expect(mappingSelect).toHaveValue("auto");
   });
 
-  test("shows difficulty selector and match readability labels", () => {
+  test("uses clickable difficulty cards and keeps readability labels", () => {
     render(<App />);
 
-    expect(screen.getByLabelText("Difficulty")).toHaveValue("normal");
+    expect(screen.getByRole("button", { name: /^Normal/i })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: /^Hard/i }));
+    expect(screen.getByRole("button", { name: /^Hard/i })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("AI: hard")).toBeInTheDocument();
     expect(screen.getByTestId("hud-possession-owner")).toHaveTextContent("Loose Ball");
     expect(screen.getByTestId("hud-cpu-phase")).toHaveTextContent("recover");
+  });
+
+  test("shows advanced options behind the options toggle", () => {
+    render(<App />);
+
+    expect(screen.queryByLabelText("AI Pace")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    expect(screen.getByLabelText("AI Pace")).toHaveValue("0.85");
+    expect(screen.getByText("85%")).toBeInTheDocument();
+    expect(screen.getByText(/Press F to tackle near the ball carrier/i)).toBeInTheDocument();
+  });
+
+  test("queues and clears a tackle command with the F hotkey", () => {
+    render(<App />);
+    startAndSkipIntro();
+
+    fireEvent.click(screen.getByTestId("mock-opponent-possession"));
+    fireEvent.keyDown(window, { key: "f" });
+
+    expect(screen.getByTestId("tackle-command").textContent).toMatch(/^tackle-player_one-/);
+
+    fireEvent.click(screen.getByTestId("resolve-tackle"));
+    expect(screen.getByTestId("tackle-command")).toHaveTextContent("");
+  });
+
+  test("requires focus to leave editable controls before the F tackle hotkey can queue", () => {
+    render(<App />);
+    startAndSkipIntro();
+
+    fireEvent.click(screen.getByTestId("mock-opponent-possession"));
+
+    const optionsButton = screen.getByRole("button", { name: "Options" });
+    fireEvent.click(optionsButton);
+
+    const aiPaceSlider = screen.getByLabelText("AI Pace");
+    aiPaceSlider.focus();
+    expect(aiPaceSlider).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: "f" });
+    expect(screen.getByTestId("tackle-command")).toHaveTextContent("");
+
+    fireEvent.blur(aiPaceSlider);
+    optionsButton.focus();
+    expect(optionsButton).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: "f" });
+    expect(screen.getByTestId("tackle-command").textContent).toMatch(/^tackle-player_one-/);
+
+    fireEvent.click(screen.getByTestId("resolve-tackle"));
+    expect(screen.getByTestId("tackle-command")).toHaveTextContent("");
   });
 
   test("supports camera hotkeys for cycle and direct slot jump", () => {
     render(<App />);
 
+    fireEvent.click(screen.getByRole("button", { name: "Options" }));
     const povSelect = screen.getByLabelText("Camera POV");
     expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
 
@@ -401,6 +628,7 @@ describe("App", () => {
       expect(screen.getByText(/Status: Idle \| Replay/i)).toBeInTheDocument();
     });
 
+    fireEvent.click(screen.getByRole("button", { name: "Options" }));
     const povSelect = screen.getByLabelText("Camera POV");
     expect(povSelect).toBeEnabled();
   });
@@ -422,6 +650,7 @@ describe("App", () => {
       expect(screen.getByText(/Status: Idle \| Replay/i)).toBeInTheDocument();
     });
 
+    fireEvent.click(screen.getByRole("button", { name: "Options" }));
     const povSelect = screen.getByLabelText("Camera POV");
     expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
 
@@ -489,6 +718,23 @@ describe("App", () => {
     expect(screen.getByTestId("replay-state")).toHaveTextContent("idle");
   });
 
+  test("restart clears pending team two cpu commands and attack memory", () => {
+    render(<App />);
+    startAndSkipIntro();
+
+    primeCpuAutomationState();
+    expect(screen.getByTestId("ball-action-command")).toHaveTextContent("cpu-shot-opponent_one-seeded");
+
+    fireEvent.click(screen.getByRole("button", { name: "Restart Match" }));
+
+    expect(screen.getByTestId("ball-action-command")).toHaveTextContent("");
+    expect(latestOutfieldAiProps.teamAttackMemoryRef.current.teamTwo).toMatchObject({
+      possessionStartMs: null,
+      ballZone: "midfield",
+      actionLocks: {},
+    });
+  });
+
   test("allows manual Tab switching when Team One has no possession", () => {
     render(<App />);
     startAndSkipIntro();
@@ -515,6 +761,38 @@ describe("App", () => {
     expect(screen.getByTestId("active-player-label")).toHaveTextContent("Player Two");
   });
 
+  test("keeps outfield control when the Team One keeper gains possession", () => {
+    render(<App />);
+    startAndSkipIntro();
+
+    fireEvent.click(screen.getByTestId("mock-possession-player-two"));
+    expect(screen.getByTestId("active-player-label")).toHaveTextContent("Player Two");
+
+    fireEvent.click(screen.getByTestId("mock-keeper-possession"));
+    expect(screen.getByTestId("active-player-label")).toHaveTextContent("Player Two");
+  });
+
+  test("repairs an invalid keeper active player back to a Team One outfielder", async () => {
+    window.__SOCCER_E2E__ = true;
+
+    render(<App />);
+    startAndSkipIntro();
+
+    await waitFor(() => {
+      expect(window.__SOCCER_TEST_API__).toBeTruthy();
+    });
+
+    act(() => {
+      window.__SOCCER_TEST_API__.setActivePlayerId("keeper-team-one");
+    });
+
+    fireEvent.click(screen.getByTestId("mock-keeper-possession"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("active-player-label")).toHaveTextContent("Player One");
+    });
+  });
+
   test("S pass transfers control after the ball action resolves", () => {
     render(<App />);
     startAndSkipIntro();
@@ -529,6 +807,210 @@ describe("App", () => {
     expect(screen.getByTestId("active-player-label")).toHaveTextContent("Player Two");
   });
 
+  test("C queues a lofted clear for the active Team One carrier", () => {
+    render(<App />);
+    startAndSkipIntro();
+
+    fireEvent.click(screen.getByTestId("mock-possession"));
+    fireEvent.keyDown(window, { key: "c" });
+
+    expect(screen.getByTestId("ball-action-command").textContent).toMatch(/^lob-clear-player_one-/);
+  });
+
+  test("keeper possession stages a two-second keeper punt reset before launching", async () => {
+    vi.useFakeTimers();
+
+    try {
+      render(<App />);
+      startAndSkipIntro();
+
+      fireEvent.click(screen.getByTestId("mock-keeper-possession"));
+      await act(async () => {});
+      expect(screen.getByText(/Status: Restart/i)).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(GOALKEEPER_CONFIG.RESTART_HOLD_MS + 40);
+      });
+
+      expect(screen.getByTestId("ball-action-command").textContent).toMatch(
+        /^keeper_punt-keeper-team-one-/
+      );
+
+      fireEvent.click(screen.getByTestId("resolve-ball-action"));
+      expect(screen.getByText("Status: In Play")).toBeInTheDocument();
+      expect(screen.getByTestId("event-ticker")).toHaveTextContent("Brazil keeper punt");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("sideline exits stage a throw-in restart for the non-touching team", () => {
+    vi.useFakeTimers();
+
+    try {
+      render(<App />);
+      startAndSkipIntro();
+
+      fireEvent.click(screen.getByTestId("mock-out-throw-in"));
+      expect(screen.getByText("Status: Restart")).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(321);
+      });
+
+      expect(screen.getByTestId("kickoff-setup")).toHaveTextContent('"type":"throw_in"');
+      expect(screen.getByTestId("kickoff-setup")).toHaveTextContent('"teamId":"teamTwo"');
+      expect(screen.getByTestId("ball-action-command").textContent).toMatch(
+        /^throw_in-opponent_one-opponent_two-/
+      );
+
+      fireEvent.click(screen.getByTestId("resolve-ball-action"));
+      expect(screen.getByText("Status: In Play")).toBeInTheDocument();
+      expect(screen.getByTestId("event-ticker")).toHaveTextContent("Argentina throw-in");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("goal-line exits stage a goal kick for the defending team", () => {
+    vi.useFakeTimers();
+
+    try {
+      render(<App />);
+      startAndSkipIntro();
+
+      fireEvent.click(screen.getByTestId("mock-out-goal-kick"));
+
+      act(() => {
+        vi.advanceTimersByTime(321);
+      });
+
+      expect(screen.getByTestId("kickoff-setup")).toHaveTextContent('"type":"goal_kick"');
+      expect(screen.getByTestId("kickoff-setup")).toHaveTextContent('"teamId":"teamOne"');
+      expect(screen.getByTestId("ball-action-command").textContent).toMatch(
+        /^goal_kick-player_one-player_two-/
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("goal-line exits stage a corner for the attacking team when defenders touch last", () => {
+    vi.useFakeTimers();
+
+    try {
+      render(<App />);
+      startAndSkipIntro();
+
+      fireEvent.click(screen.getByTestId("mock-out-corner"));
+
+      act(() => {
+        vi.advanceTimersByTime(321);
+      });
+
+      expect(screen.getByTestId("kickoff-setup")).toHaveTextContent('"type":"corner_kick"');
+      expect(screen.getByTestId("kickoff-setup")).toHaveTextContent('"teamId":"teamOne"');
+      expect(screen.getByTestId("ball-action-command").textContent).toMatch(
+        /^corner_kick-player_one-player_two-/
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("halftime flips sides, swaps goal ownership, and gives the second-half kickoff to Team Two", () => {
+    vi.useFakeTimers();
+
+    try {
+      window.__SOCCER_E2E__ = true;
+      render(<App />);
+      startAndSkipIntro();
+      autoResolveKickoffCommands = false;
+      expect(window.__SOCCER_TEST_API__).toBeTruthy();
+
+      const negativeGoalBefore = screen
+        .getAllByRole("button")
+        .find((button) => button.dataset.goalSide === "negative-z");
+      const positiveGoalBefore = screen
+        .getAllByRole("button")
+        .find((button) => button.dataset.goalSide === "positive-z");
+
+      expect(negativeGoalBefore).toHaveAttribute("data-goal-id", "teamOne");
+      expect(positiveGoalBefore).toHaveAttribute("data-goal-id", "teamTwo");
+
+      act(() => {
+        vi.advanceTimersByTime((MATCH_DURATION_SECONDS / 2) * 1000);
+      });
+
+      expect(screen.getByText("Status: Kickoff")).toBeInTheDocument();
+      expect(screen.getByText("HALF-TIME")).toBeInTheDocument();
+      expect(screen.getByTestId("kickoff-setup")).toHaveTextContent('"teamId":"teamTwo"');
+      expect(screen.getByTestId("kickoff-setup")).toHaveTextContent('"takerId":"opponent_one"');
+
+      const halftimeSnapshot = window.__SOCCER_TEST_API__.getSnapshot();
+      expect(halftimeSnapshot.currentHalf).toBe(2);
+      expect(halftimeSnapshot.teamAttackDirections).toEqual({
+        teamOne: 1,
+        teamTwo: -1,
+      });
+      expect(halftimeSnapshot.goalAssignments).toEqual({
+        negativeZ: "teamTwo",
+        positiveZ: "teamOne",
+      });
+
+      expect(getMockPlayer("player_one")).toHaveAttribute(
+        "data-position",
+        JSON.stringify([-6, 0, -22])
+      );
+      expect(getMockKeeper("keeper-team-one")).toHaveAttribute(
+        "data-position",
+        JSON.stringify([0, 0, -72.5])
+      );
+
+      const negativeGoalAfter = screen
+        .getAllByRole("button")
+        .find((button) => button.dataset.goalSide === "negative-z");
+      const positiveGoalAfter = screen
+        .getAllByRole("button")
+        .find((button) => button.dataset.goalSide === "positive-z");
+
+      expect(negativeGoalAfter).toHaveAttribute("data-goal-id", "teamTwo");
+      expect(positiveGoalAfter).toHaveAttribute("data-goal-id", "teamOne");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("physical goal-side scoring shows the correct team text after halftime", async () => {
+    window.__SOCCER_E2E__ = true;
+    render(<App />);
+    startAndSkipIntro();
+
+    await waitFor(() => {
+      expect(window.__SOCCER_TEST_API__).toBeTruthy();
+    });
+
+    act(() => {
+      window.__SOCCER_TEST_API__.setTimeLeft(60);
+    });
+
+    await waitFor(() => {
+      const snapshot = window.__SOCCER_TEST_API__.getSnapshot();
+      expect(snapshot.currentHalf).toBe(2);
+      expect(snapshot.goalAssignments.negativeZ).toBe("teamTwo");
+      expect(snapshot.gameState).toBe("in_play");
+    });
+
+    act(() => {
+      window.__SOCCER_TEST_API__.triggerPhysicalGoal("negativeZ");
+    });
+
+    expect(screen.getByTestId("score-team-one")).toHaveTextContent("0");
+    expect(screen.getByTestId("score-team-two")).toHaveTextContent("1");
+    expect(screen.getByText("ARGENTINA GOAL")).toBeInTheDocument();
+    expect(screen.getByTestId("event-ticker")).toHaveTextContent("Argentina goal");
+  });
+
   test("waits for goal replay to finish before resetting the field", () => {
     vi.useFakeTimers();
 
@@ -538,6 +1020,7 @@ describe("App", () => {
       seedReplayBuffer();
 
       const playerOneSpawnPosition = JSON.stringify(PLAYER_PROFILES.player_one.startPosition);
+      fireEvent.click(screen.getByRole("button", { name: "Options" }));
       fireEvent.change(screen.getByLabelText("Movement Mapping"), { target: { value: "world" } });
       const preGoalPosition = getMockPlayer("player_one").dataset.position;
 
@@ -605,6 +1088,40 @@ describe("App", () => {
 
       fireEvent.click(screen.getByTestId("resolve-ball-action"));
       expect(screen.getByText("Status: In Play")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("replay start and kickoff clear stale team two cpu automation", () => {
+    vi.useFakeTimers();
+
+    try {
+      render(<App />);
+      startAndSkipIntro();
+      seedReplayBuffer();
+      autoResolveKickoffCommands = false;
+
+      fireEvent.click(screen.getByTestId("goal-teamOne"));
+      primeCpuAutomationState();
+      expect(screen.getByTestId("ball-action-command")).toHaveTextContent("cpu-shot-opponent_one-seeded");
+
+      syncReplayDirector(12_000);
+      expect(screen.getByText(/Status: Goal Scored \| Replay/i)).toBeInTheDocument();
+      expect(screen.getByTestId("ball-action-command")).toHaveTextContent("");
+      expect(latestOutfieldAiProps.teamAttackMemoryRef.current.teamTwo.actionLocks).toEqual({});
+
+      primeCpuAutomationState();
+      expect(screen.getByTestId("ball-action-command")).toHaveTextContent("cpu-shot-opponent_one-seeded");
+
+      syncReplayDirector(13_000);
+      act(() => {
+        vi.advanceTimersByTime(KICKOFF_CONFIG.POST_GOAL_DELAY_MS);
+      });
+
+      expect(screen.getByText("Status: Kickoff")).toBeInTheDocument();
+      expect(screen.getByTestId("ball-action-command").textContent).toMatch(/^kickoff-/);
+      expect(latestOutfieldAiProps.teamAttackMemoryRef.current.teamTwo.actionLocks).toEqual({});
     } finally {
       vi.useRealTimers();
     }

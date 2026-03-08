@@ -76,8 +76,8 @@ describe("GoalNet", () => {
     triggerCollision({ body: { name: BALL_BODY_NAME } });
 
     expect(onGoal).toHaveBeenCalledTimes(2);
-    expect(onGoal).toHaveBeenNthCalledWith(1, "teamOne");
-    expect(onGoal).toHaveBeenNthCalledWith(2, "teamOne");
+    expect(onGoal).toHaveBeenNthCalledWith(1, "negativeZ");
+    expect(onGoal).toHaveBeenNthCalledWith(2, "negativeZ");
   });
 
   it("ignores non-ball bodies and inactive goals", () => {

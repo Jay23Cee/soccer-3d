@@ -1,9 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 export default function useGoalkeeperAI({
   enabled,
   ballSnapshot,
   difficulty,
+  aiPaceMultiplier,
   goalkeeperConfig,
   updateGoalkeeperController,
   setGoalkeeperState,
@@ -11,13 +12,21 @@ export default function useGoalkeeperAI({
   goalkeeperLastUpdateAtRef,
   nowMs,
 }) {
+  const ballSnapshotRef = useRef(ballSnapshot);
+
+  useEffect(() => {
+    ballSnapshotRef.current = ballSnapshot;
+  }, [ballSnapshot]);
+
   useEffect(() => {
     if (!enabled) {
       return undefined;
     }
 
     const timer = setInterval(() => {
-      if (!ballSnapshot) {
+      const latestBallSnapshot = ballSnapshotRef.current;
+
+      if (!latestBallSnapshot) {
         return;
       }
 
@@ -33,35 +42,37 @@ export default function useGoalkeeperAI({
           nowMs: now,
           deltaSeconds,
           difficulty,
+          aiPaceMultiplier,
           keeperState: currentState.teamOne,
-          ballSnapshot,
+          ballSnapshot: latestBallSnapshot,
         });
         const nextTeamTwo = updateGoalkeeperController({
           nowMs: now,
           deltaSeconds,
           difficulty,
+          aiPaceMultiplier,
           keeperState: currentState.teamTwo,
-          ballSnapshot,
+          ballSnapshot: latestBallSnapshot,
         });
 
-        const saveKeeper = nextTeamOne.saveRequested
+        const distributingKeeper = nextTeamOne.saveRequested || nextTeamOne.distributionRequested
           ? nextTeamOne
-          : nextTeamTwo.saveRequested
+          : nextTeamTwo.saveRequested || nextTeamTwo.distributionRequested
             ? nextTeamTwo
             : null;
 
-        if (saveKeeper?.distributeImpulse) {
+        if (distributingKeeper?.distributeImpulse) {
           setBallActionCommand((currentCommand) =>
             currentCommand || {
-              id: `keeper-save-${saveKeeper.teamId}-${now}`,
-              actorId: saveKeeper.playerId,
-              teamId: saveKeeper.teamId,
+              id: `keeper-save-${distributingKeeper.teamId}-${now}`,
+              actorId: distributingKeeper.playerId,
+              teamId: distributingKeeper.teamId,
               type: "clear",
               targetPlayerId: null,
               targetPosition: [
-                saveKeeper.teamId === "teamOne" ? 0 : 0,
+                distributingKeeper.teamId === "teamOne" ? 0 : 0,
                 0,
-                saveKeeper.teamId === "teamOne" ? -18 : 18,
+                distributingKeeper.teamId === "teamOne" ? -18 : 18,
               ],
               power: 1.15,
             }
@@ -77,7 +88,7 @@ export default function useGoalkeeperAI({
 
     return () => clearInterval(timer);
   }, [
-    ballSnapshot,
+    aiPaceMultiplier,
     difficulty,
     enabled,
     goalkeeperConfig.UPDATE_INTERVAL_MS,

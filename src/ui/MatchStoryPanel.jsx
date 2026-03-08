@@ -1,25 +1,5 @@
 import React from "react";
-
-function formatEventLabel(event) {
-  if (!event) {
-    return "";
-  }
-
-  switch (event.type) {
-    case "goal":
-      return `${event.teamName} goal`;
-    case "save":
-      return `${event.teamName} save`;
-    case "shot":
-      return `${event.teamName} shot`;
-    case "boost":
-      return `${event.label} boost`;
-    case "possession":
-      return `${event.teamName} possession`;
-    default:
-      return event.label || event.type;
-  }
-}
+import { formatMatchEventLabel } from "../match/events";
 
 function MatchStoryPanel({
   matchStats,
@@ -96,7 +76,7 @@ function MatchStoryPanel({
       <div className="event-ticker" data-testid="event-ticker">
         {(eventTimeline || []).slice(0, 6).map((event) => (
           <p key={event.id}>
-            <span>{formatEventLabel(event)}</span>
+            <span>{formatMatchEventLabel(event)}</span>
             <small>{event.clockLabel}</small>
           </p>
         ))}

@@ -470,6 +470,155 @@
   color: #87b3d3;
 }
 
+.overlay.is-hub {
+  background:
+    radial-gradient(circle at 15% -10%, rgba(34, 197, 94, 0.2), transparent 38%),
+    radial-gradient(circle at 92% 10%, rgba(56, 189, 248, 0.18), transparent 34%),
+    linear-gradient(145deg, rgba(5, 16, 26, 0.96), rgba(8, 22, 34, 0.94));
+}
+
+.hub-intro {
+  margin: 0 0 0.85rem;
+  padding: 0.95rem;
+  border-radius: 16px;
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  background:
+    radial-gradient(circle at 85% 15%, rgba(34, 197, 94, 0.16), transparent 30%),
+    linear-gradient(145deg, rgba(8, 24, 38, 0.92), rgba(4, 14, 22, 0.92));
+  box-shadow: 0 12px 28px rgba(3, 7, 12, 0.24);
+}
+
+.hub-kicker {
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 760;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #9ed7ef;
+}
+
+.hub-title {
+  margin: 0;
+  font-size: 1.28rem;
+  line-height: 1.12;
+  color: #f7fcff;
+}
+
+.hub-copy {
+  margin: 0.55rem 0 0;
+  font-size: 0.84rem;
+  line-height: 1.48;
+  color: #c6dcee;
+}
+
+.hub-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.hub-start-button {
+  flex: 1 1 170px;
+  min-height: 48px;
+}
+
+.options-toggle {
+  min-width: 112px;
+}
+
+.options-toggle.is-active {
+  border-color: rgba(34, 197, 94, 0.42);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.16) inset;
+}
+
+.selection-section {
+  margin-bottom: 0.78rem;
+}
+
+.selection-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.7rem;
+  margin-bottom: 0.42rem;
+  font-size: 0.8rem;
+  color: #d4ebf7;
+}
+
+.selection-heading strong {
+  color: #f6fcff;
+  font-size: 0.84rem;
+}
+
+.selection-heading span {
+  text-align: right;
+  font-size: 0.72rem;
+  color: #92b8d1;
+}
+
+.selection-grid {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.selection-grid-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.selection-grid-camera {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.selection-card {
+  width: 100%;
+  padding: 0.7rem 0.75rem;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(8, 22, 34, 0.7);
+  color: #ddf4ff;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    border-color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.selection-card:hover {
+  transform: translateY(-1px);
+  background: rgba(10, 28, 42, 0.88);
+}
+
+.selection-card.is-active {
+  border-color: rgba(34, 197, 94, 0.52);
+  background:
+    linear-gradient(135deg, rgba(34, 197, 94, 0.16), rgba(56, 189, 248, 0.12)),
+    rgba(8, 22, 34, 0.88);
+  box-shadow:
+    0 0 0 1px rgba(34, 197, 94, 0.18) inset,
+    0 12px 20px rgba(3, 7, 12, 0.18);
+}
+
+.selection-card small {
+  display: block;
+  margin-top: 0.26rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #93b8cf;
+}
+
+.selection-card-compact {
+  padding: 0.62rem 0.68rem;
+}
+
+.selection-card-label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 .status-label {
   margin: 0;
   padding: 0.35rem 0.6rem;
@@ -658,6 +807,34 @@
   background: linear-gradient(90deg, #ef4444 0%, #f97316 100%);
 }
 
+.options-panel {
+  margin-bottom: 0.85rem;
+  padding: 0.72rem;
+  border-radius: 14px;
+  border: 1px solid rgba(125, 211, 252, 0.2);
+  background: rgba(5, 16, 26, 0.72);
+}
+
+.options-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.7rem;
+  margin-bottom: 0.6rem;
+}
+
+.options-panel-header strong {
+  color: #f5fcff;
+  font-size: 0.86rem;
+}
+
+.options-panel-header span {
+  max-width: 180px;
+  text-align: right;
+  font-size: 0.72rem;
+  color: #93b7ce;
+}
+
 .scoreboard {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -764,6 +941,11 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(120px, 1fr));
   gap: 0.55rem;
+  margin-bottom: 0.85rem;
+}
+
+.controls-compact {
+  margin-bottom: 0.85rem;
 }
 
 .controls button {
@@ -831,7 +1013,7 @@
 }
 
 .help-text {
-  margin: 0.85rem 0 0;
+  margin: 0;
   font-size: 0.79rem;
   line-height: 1.42;
   color: #bfd3e2;
@@ -1031,6 +1213,11 @@
   }
 
   .scoreboard {
+    grid-template-columns: 1fr;
+  }
+
+  .selection-grid-three,
+  .selection-grid-camera {
     grid-template-columns: 1fr;
   }
 

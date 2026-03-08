@@ -4,6 +4,7 @@ export const GAME_STATES = {
   IN_PLAY: "in_play",
   GOAL_SCORED: "goal_scored",
   KICKOFF: "kickoff",
+  RESTART: "restart",
   PAUSED: "paused",
   ENDED: "ended",
 };
@@ -210,16 +211,16 @@ export const GOALKEEPER_PROFILES = {
     teamId: TEAM_IDS.TEAM_ONE,
     role: PLAYER_ROLES.GOALKEEPER,
     label: "Team One Keeper",
-    spawnPosition: [0, 0, -72.5],
-    spawnRotation: [0, 0, 0],
+    spawnPosition: [0, 0, 72.5],
+    spawnRotation: [0, Math.PI, 0],
   },
   [TEAM_IDS.TEAM_TWO]: {
     playerId: "keeper-team-two",
     teamId: TEAM_IDS.TEAM_TWO,
     role: PLAYER_ROLES.GOALKEEPER,
     label: "Team Two Keeper",
-    spawnPosition: [0, 0, 72.5],
-    spawnRotation: [0, Math.PI, 0],
+    spawnPosition: [0, 0, -72.5],
+    spawnRotation: [0, 0, 0],
   },
 };
 
@@ -238,6 +239,22 @@ export const PLAYER_PASS_CONFIG = {
   COOLDOWN_MS: 220,
   PASS_SPEED: 16,
   PASS_LOFT: 1.2,
+};
+
+export const PLAYER_LOB_CLEAR_CONFIG = {
+  KEY: "c",
+  COOLDOWN_MS: 320,
+  TARGET_DISTANCE: 28,
+  POWER: 1.08,
+};
+
+export const PLAYER_TACKLE_CONFIG = {
+  KEY: "f",
+  COOLDOWN_MS: 420,
+  RANGE: 2.4,
+  FACING_DOT_MIN: 0.34,
+  IMPULSE_FORWARD: 8.5,
+  IMPULSE_UPWARD: 1.35,
 };
 
 export const PLAYER_STAMINA_CONFIG = {
@@ -262,7 +279,7 @@ export const DIFFICULTY_PRESETS = {
     chaseRange: 58,
     pressureDistance: 12,
     shotChance: 0.32,
-    shotConfidenceThreshold: 0.58,
+    shotConfidenceThreshold: 0.62,
     passRiskTolerance: 0.3,
     pressIntensity: 0.82,
     supportResponsiveness: 0.9,
@@ -270,6 +287,10 @@ export const DIFFICULTY_PRESETS = {
     claimAssertiveness: 0.84,
     maxRunSpeedMultiplier: 0.9,
     keeperReachMultiplier: 0.9,
+    attackCommitmentDistance: 18,
+    supportRunDepth: 12,
+    secondaryPressCompactness: 0.46,
+    actionLockMs: 640,
   },
   normal: {
     reactionMs: 240,
@@ -278,26 +299,34 @@ export const DIFFICULTY_PRESETS = {
     shotChance: 0.48,
     shotConfidenceThreshold: 0.5,
     passRiskTolerance: 0.45,
-    pressIntensity: 1,
-    supportResponsiveness: 1,
+    pressIntensity: 1.04,
+    supportResponsiveness: 1.04,
     recoverySpeedMultiplier: 1,
     claimAssertiveness: 1,
     maxRunSpeedMultiplier: 1,
     keeperReachMultiplier: 1,
+    attackCommitmentDistance: 24,
+    supportRunDepth: 17,
+    secondaryPressCompactness: 0.62,
+    actionLockMs: 430,
   },
   hard: {
     reactionMs: 170,
     chaseRange: 78,
-    pressureDistance: 18,
+    pressureDistance: 19,
     shotChance: 0.65,
-    shotConfidenceThreshold: 0.42,
+    shotConfidenceThreshold: 0.36,
     passRiskTolerance: 0.62,
-    pressIntensity: 1.14,
-    supportResponsiveness: 1.1,
+    pressIntensity: 1.18,
+    supportResponsiveness: 1.14,
     recoverySpeedMultiplier: 1.08,
     claimAssertiveness: 1.12,
     maxRunSpeedMultiplier: 1.08,
     keeperReachMultiplier: 1.12,
+    attackCommitmentDistance: 29,
+    supportRunDepth: 22,
+    secondaryPressCompactness: 0.74,
+    actionLockMs: 300,
   },
 };
 
@@ -326,6 +355,8 @@ export const GOALKEEPER_CONFIG = {
   REACTION_DISTANCE: 27,
   SAVE_RADIUS: 4.2,
   SAVE_COOLDOWN_MS: 540,
+  POSSESSION_HOLD_MS: 260,
+  RESTART_HOLD_MS: 2000,
   DISTRIBUTE_IMPULSE: 12,
   RESET_MS: 560,
 };

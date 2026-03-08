@@ -3,7 +3,13 @@ import { useSphere } from "@react-three/cannon";
 import { useFrame } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
-import { BALL_BODY_NAME, BALL_CONFIG, PLAYER_ROLES, SHOT_METER_CONFIG } from "./config/gameConfig";
+import {
+  BALL_BODY_NAME,
+  BALL_CONFIG,
+  PLAYER_ROLES,
+  PLAYER_TACKLE_CONFIG,
+  SHOT_METER_CONFIG,
+} from "./config/gameConfig";
 
 const BALL_MODES = {
   LOOSE: "loose",
@@ -35,6 +41,39 @@ const SHOT_CHARGE_IDLE = {
   canShoot: false,
 };
 
+const BALL_RELEASE_PROFILES = {
+  loose: {
+    maxSpeed: BALL_CONFIG.MAX_SPEED,
+    horizontalDamping: 0.88,
+    bounceDamping: 0.52,
+    minBounceSpeed: 0.32,
+  },
+  pass: {
+    maxSpeed: 18,
+    horizontalDamping: 0.84,
+    bounceDamping: 0.44,
+    minBounceSpeed: 0.28,
+  },
+  shot: {
+    maxSpeed: 52,
+    horizontalDamping: 0.94,
+    bounceDamping: 0.68,
+    minBounceSpeed: 0.55,
+  },
+  lob_clear: {
+    maxSpeed: 34,
+    horizontalDamping: 0.9,
+    bounceDamping: 0.62,
+    minBounceSpeed: 0.46,
+  },
+  clear: {
+    maxSpeed: 46,
+    horizontalDamping: 0.92,
+    bounceDamping: 0.64,
+    minBounceSpeed: 0.52,
+  },
+};
+
 function quantizeChargeRatio(chargeRatio) {
   const clamped = THREE.MathUtils.clamp(chargeRatio, 0, 1);
   return Math.min(1, Math.floor(clamped * 100) / 100);
@@ -50,6 +89,10 @@ function getNowMs() {
 
 function isShootKey(eventKey) {
   return typeof eventKey === "string" && eventKey.toLowerCase() === PLAYER_SHOOT_KEY;
+}
+
+function releaseProfileForType(type) {
+  return BALL_RELEASE_PROFILES[type] || BALL_RELEASE_PROFILES.loose;
 }
 
 function worldForceFromArrowKey(key, magnitude) {
@@ -78,6 +121,14 @@ function normalize2D(vector) {
   }
 
   return [vector[0] / magnitude, vector[1] / magnitude];
+}
+
+function distance2D(a, b) {
+  return Math.hypot(a[0] - b[0], a[2] - b[2]);
+}
+
+function dot2D(left, right) {
+  return left[0] * right[0] + left[1] * right[1];
 }
 
 function facingVector(rotation) {
@@ -157,16 +208,26 @@ function buildLaunchVector({ actor, targetPosition, targetPlayer, type, power = 
   if (type === "pass") {
     return [
       resolvedDirection[0] * BALL_CONFIG.FORCE * clamp(power, 0.7, 1.45),
-      1.15,
+      0.95,
       resolvedDirection[1] * BALL_CONFIG.FORCE * clamp(power, 0.7, 1.45),
     ];
   }
 
-  if (type === "clear") {
+  if (type === "lob_clear") {
+    const loft = clamp(power, 0.9, 1.3);
     return [
-      resolvedDirection[0] * BALL_CONFIG.FORCE * clamp(power, 0.9, 1.5),
-      2.4,
-      resolvedDirection[1] * BALL_CONFIG.FORCE * clamp(power, 0.9, 1.5),
+      resolvedDirection[0] * 26 * loft,
+      5.35 * loft,
+      resolvedDirection[1] * 26 * loft,
+    ];
+  }
+
+  if (type === "clear") {
+    const launchPower = clamp(power, 1, 1.6);
+    return [
+      resolvedDirection[0] * 31 * launchPower,
+      6.2 * launchPower,
+      resolvedDirection[1] * 31 * launchPower,
     ];
   }
 
@@ -185,6 +246,8 @@ function SoccerBallModel(props) {
     kickoffRef,
     ballActionCommand,
     onBallActionResolved,
+    tackleCommand,
+    onTackleResolved,
     controlsEnabled,
     mapMovementKeyToForce,
     players = [],
@@ -230,6 +293,9 @@ function SoccerBallModel(props) {
   const contestCandidateRef = useRef(null);
   const possessionLockUntilRef = useRef(0);
   const releaseToLooseAtRef = useRef(0);
+  const releaseProfileRef = useRef(BALL_RELEASE_PROFILES.loose);
+  const previousVelocityRef = useRef([0, 0, 0]);
+  const lastBounceAtMsRef = useRef(0);
   const spaceHeldRef = useRef(false);
   const pendingAutoTapRef = useRef(null);
   const shotChargeStartAtRef = useRef(0);
@@ -243,6 +309,9 @@ function SoccerBallModel(props) {
   const lastPossessionRef = useRef(null);
   const lastSnapshotAtMsRef = useRef(0);
   const appliedBallActionIdRef = useRef(null);
+  const appliedTackleCommandIdRef = useRef(null);
+  const tackleCooldownUntilRef = useRef(0);
+  const lastTouchRef = useRef(null);
 
   const playersById = useMemo(
     () =>
@@ -303,6 +372,23 @@ function SoccerBallModel(props) {
     [onPossessionChange]
   );
 
+  const emitTackleResolution = useCallback(
+    (command, accepted) => {
+      if (!onTackleResolved || !command?.id) {
+        return;
+      }
+
+      onTackleResolved({
+        id: command.id,
+        accepted,
+        actorId: command.actorId,
+        teamId: command.teamId,
+        carrierId: command.carrierId || null,
+      });
+    },
+    [onTackleResolved]
+  );
+
   const clearPossession = useCallback(() => {
     possessionRef.current = null;
     emitPossessionChange(null);
@@ -315,6 +401,10 @@ function SoccerBallModel(props) {
       }
 
       possessionRef.current = {
+        teamId: actor.teamId,
+        playerId: actor.playerId,
+      };
+      lastTouchRef.current = {
         teamId: actor.teamId,
         playerId: actor.playerId,
       };
@@ -332,6 +422,7 @@ function SoccerBallModel(props) {
       api.angularVelocity.set(0, 0, 0);
       ballPositionRef.current = anchor;
       velocityRef.current = [0, 0, 0];
+      previousVelocityRef.current = [0, 0, 0];
     },
     [api, scale]
   );
@@ -343,8 +434,36 @@ function SoccerBallModel(props) {
       api.angularVelocity.set(0, 0, 0);
       ballPositionRef.current = [...nextPosition];
       velocityRef.current = [0, 0, 0];
+      previousVelocityRef.current = [0, 0, 0];
     },
     [api]
+  );
+
+  const releaseLooseBall = useCallback(
+    (originPosition, nextVelocity, lastTouch = null) => {
+      const now = getNowMs();
+      ballModeRef.current = BALL_MODES.RELEASED;
+      releaseProfileRef.current = BALL_RELEASE_PROFILES.loose;
+      possessionLockUntilRef.current = now + BALL_OWNERSHIP_CONFIG.RELEASE_CLAIM_LOCK_MS;
+      releaseToLooseAtRef.current = now + BALL_OWNERSHIP_CONFIG.RELEASE_TO_LOOSE_MS;
+      claimCandidateRef.current = null;
+      contestCandidateRef.current = null;
+      api.position.set(originPosition[0], originPosition[1], originPosition[2]);
+      api.velocity.set(nextVelocity[0], nextVelocity[1], nextVelocity[2]);
+      api.angularVelocity.set(0, 0, 0);
+      ballPositionRef.current = [...originPosition];
+      velocityRef.current = [...nextVelocity];
+      previousVelocityRef.current = [...nextVelocity];
+      if (lastTouch?.teamId && lastTouch?.playerId) {
+        lastTouchRef.current = {
+          teamId: lastTouch.teamId,
+          playerId: lastTouch.playerId,
+        };
+      }
+      clearPossession();
+      kickoffSetupRef.current = null;
+    },
+    [api, clearPossession]
   );
 
   const resetShotCharge = useCallback(() => {
@@ -380,6 +499,7 @@ function SoccerBallModel(props) {
       });
 
       ballModeRef.current = BALL_MODES.RELEASED;
+      releaseProfileRef.current = releaseProfileForType(type);
       possessionLockUntilRef.current = now + BALL_OWNERSHIP_CONFIG.RELEASE_CLAIM_LOCK_MS;
       releaseToLooseAtRef.current = now + BALL_OWNERSHIP_CONFIG.RELEASE_TO_LOOSE_MS;
       claimCandidateRef.current = null;
@@ -389,6 +509,13 @@ function SoccerBallModel(props) {
       api.angularVelocity.set(0, 0, 0);
       ballPositionRef.current = anchor;
       velocityRef.current = [...vector];
+      previousVelocityRef.current = [...vector];
+      lastTouchRef.current = actor?.teamId
+        ? {
+            teamId: actor.teamId,
+            playerId: actor.playerId,
+          }
+        : lastTouchRef.current;
       clearPossession();
 
       kickoffSetupRef.current = null;
@@ -418,26 +545,55 @@ function SoccerBallModel(props) {
     [api, clearPossession, onKickRelease, onShotEvent, scale, shotPowerMultiplier]
   );
 
-  const resetBall = useCallback(() => {
-    directionRef.current = [0, 0, 0];
-    possessionLockUntilRef.current = 0;
-    releaseToLooseAtRef.current = 0;
-    ballModeRef.current = BALL_MODES.LOOSE;
-    kickoffSetupRef.current = null;
-    claimCandidateRef.current = null;
-    contestCandidateRef.current = null;
-    clearPossession();
-    resetShotCharge();
-    outOfBoundsLockRef.current = false;
-    triggeredZoneIdRef.current = null;
-    placeStationaryBall(BALL_CONFIG.SPAWN_POSITION);
-  }, [clearPossession, placeStationaryBall, resetShotCharge]);
+  const resetBall = useCallback(
+    (resetOptions = null) => {
+      const requestedPosition = Array.isArray(resetOptions?.position)
+        ? resetOptions.position
+        : BALL_CONFIG.SPAWN_POSITION;
+      const requestedActor =
+        resetOptions?.attach === true && resetOptions?.actorId
+          ? playersById[resetOptions.actorId] || null
+          : null;
+
+      directionRef.current = [0, 0, 0];
+      possessionLockUntilRef.current = 0;
+      releaseToLooseAtRef.current = 0;
+      releaseProfileRef.current = BALL_RELEASE_PROFILES.loose;
+      tackleCooldownUntilRef.current = 0;
+      ballModeRef.current = BALL_MODES.LOOSE;
+      kickoffSetupRef.current = null;
+      claimCandidateRef.current = null;
+      contestCandidateRef.current = null;
+      clearPossession();
+      resetShotCharge();
+      outOfBoundsLockRef.current = false;
+      triggeredZoneIdRef.current = null;
+
+      if (requestedActor) {
+        attachPossession(requestedActor);
+        alignBallToActor(requestedActor);
+        return;
+      }
+
+      placeStationaryBall(requestedPosition);
+    },
+    [
+      alignBallToActor,
+      attachPossession,
+      clearPossession,
+      placeStationaryBall,
+      playersById,
+      resetShotCharge,
+    ]
+  );
 
   const kickoffBall = useCallback(
     (kickoffSetup = null) => {
       directionRef.current = [0, 0, 0];
       possessionLockUntilRef.current = 0;
       releaseToLooseAtRef.current = 0;
+      releaseProfileRef.current = BALL_RELEASE_PROFILES.loose;
+      tackleCooldownUntilRef.current = 0;
       ballModeRef.current = BALL_MODES.LOOSE;
       claimCandidateRef.current = null;
       contestCandidateRef.current = null;
@@ -563,6 +719,7 @@ function SoccerBallModel(props) {
   useEffect(() => {
     if (!controlsEnabled) {
       directionRef.current = [0, 0, 0];
+      releaseProfileRef.current = BALL_RELEASE_PROFILES.loose;
       return;
     }
 
@@ -570,6 +727,7 @@ function SoccerBallModel(props) {
     ballModeRef.current = BALL_MODES.LOOSE;
     claimCandidateRef.current = null;
     contestCandidateRef.current = null;
+    tackleCooldownUntilRef.current = 0;
     clearPossession();
     resetShotCharge();
   }, [clearPossession, controlsEnabled, resetShotCharge]);
@@ -708,6 +866,12 @@ function SoccerBallModel(props) {
 
       if (isShootKey(normalizedKey)) {
         event.preventDefault();
+        lastTouchRef.current = controlledTeamId
+          ? {
+              teamId: controlledTeamId,
+              playerId: controlledPlayerId,
+            }
+          : lastTouchRef.current;
         api.applyImpulse([0, BALL_CONFIG.JUMP_IMPULSE * shotPowerMultiplier, 0], [0, 0, 0]);
         onShotEvent?.({
           type: "ball_pop",
@@ -756,6 +920,97 @@ function SoccerBallModel(props) {
     onShotEvent,
     shotPowerMultiplier,
     speedMultiplier,
+  ]);
+
+  useEffect(() => {
+    if (!tackleCommand?.id) {
+      return;
+    }
+
+    if (appliedTackleCommandIdRef.current === tackleCommand.id) {
+      return;
+    }
+
+    appliedTackleCommandIdRef.current = tackleCommand.id;
+    const now = getNowMs();
+    const actor = playersById[tackleCommand.actorId];
+    const actorPosition = actor?.position || actor?.spawnPosition || [0, 0, 0];
+    const actorRotation = actor?.rotation || actor?.spawnRotation || [0, 0, 0];
+    const currentPossession = possessionRef.current;
+
+    if (
+      !playerControlsEnabled ||
+      replayActive ||
+      !actor ||
+      actor.teamId !== tackleCommand.teamId ||
+      tackleCommand.teamId !== controlledTeamId ||
+      tackleCommand.actorId !== controlledPlayerId
+    ) {
+      emitTackleResolution(tackleCommand, false);
+      return;
+    }
+
+    if (now < tackleCooldownUntilRef.current) {
+      emitTackleResolution(tackleCommand, false);
+      return;
+    }
+
+    tackleCooldownUntilRef.current = now + PLAYER_TACKLE_CONFIG.COOLDOWN_MS;
+
+    if (
+      ballModeRef.current !== BALL_MODES.ATTACHED ||
+      !currentPossession?.playerId ||
+      !currentPossession?.teamId ||
+      currentPossession.teamId === tackleCommand.teamId ||
+      (tackleCommand.carrierId && currentPossession.playerId !== tackleCommand.carrierId)
+    ) {
+      emitTackleResolution(tackleCommand, false);
+      return;
+    }
+
+    const carrier = playersById[currentPossession.playerId];
+    if (!carrier) {
+      emitTackleResolution(tackleCommand, false);
+      return;
+    }
+
+    const carrierPosition = carrier.position || carrier.spawnPosition || [0, 0, 0];
+    const carrierVector = normalize2D([
+      carrierPosition[0] - actorPosition[0],
+      carrierPosition[2] - actorPosition[2],
+    ]);
+    const [facingX, facingZ] = facingVector(actorRotation);
+    const resolvedDirection =
+      carrierVector[0] === 0 && carrierVector[1] === 0 ? [facingX, facingZ] : carrierVector;
+    const facingDot = dot2D([facingX, facingZ], resolvedDirection);
+    const inRange = distance2D(actorPosition, carrierPosition) <= PLAYER_TACKLE_CONFIG.RANGE;
+
+    if (!inRange || facingDot < PLAYER_TACKLE_CONFIG.FACING_DOT_MIN) {
+      emitTackleResolution(tackleCommand, false);
+      return;
+    }
+
+    resetShotCharge();
+    releaseLooseBall(actorBallAnchor(carrier, scale), [
+      resolvedDirection[0] * PLAYER_TACKLE_CONFIG.IMPULSE_FORWARD,
+      PLAYER_TACKLE_CONFIG.IMPULSE_UPWARD,
+      resolvedDirection[1] * PLAYER_TACKLE_CONFIG.IMPULSE_FORWARD,
+    ], {
+      teamId: tackleCommand.teamId,
+      playerId: actor.playerId,
+    });
+    emitTackleResolution(tackleCommand, true);
+  }, [
+    controlledPlayerId,
+    controlledTeamId,
+    emitTackleResolution,
+    playerControlsEnabled,
+    playersById,
+    releaseLooseBall,
+    replayActive,
+    resetShotCharge,
+    scale,
+    tackleCommand,
   ]);
 
   useEffect(() => {
@@ -840,7 +1095,13 @@ function SoccerBallModel(props) {
           y < BALL_CONFIG.OUT_OF_BOUNDS.Y)
       ) {
         outOfBoundsLockRef.current = true;
-        onOutOfBounds();
+        onOutOfBounds({
+          position: [x, y, z],
+          velocity: [...velocityRef.current],
+          mode: ballModeRef.current,
+          possession: possessionRef.current ? { ...possessionRef.current } : null,
+          lastTouch: lastTouchRef.current ? { ...lastTouchRef.current } : null,
+        });
 
         if (outOfBoundsTimerRef.current) {
           clearTimeout(outOfBoundsTimerRef.current);
@@ -888,6 +1149,7 @@ function SoccerBallModel(props) {
       api.angularVelocity.set(0, 0, 0);
       ballPositionRef.current = [px, py, pz];
       velocityRef.current = [...frameVelocity];
+      previousVelocityRef.current = [...frameVelocity];
       ballModeRef.current = BALL_MODES.LOOSE;
       if (possessionRef.current) {
         clearPossession();
@@ -907,12 +1169,30 @@ function SoccerBallModel(props) {
     }
 
     const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
-    const boostedMaxSpeed = BALL_CONFIG.MAX_SPEED * (speedMultiplier > 1 ? 1.35 : 1);
-    if (speed > boostedMaxSpeed && ballModeRef.current !== BALL_MODES.ATTACHED) {
-      const scaleVelocity = boostedMaxSpeed / speed;
+    const speedCap =
+      ballModeRef.current === BALL_MODES.RELEASED
+        ? releaseProfileRef.current.maxSpeed
+        : BALL_CONFIG.MAX_SPEED * (speedMultiplier > 1 ? 1.35 : 1);
+    if (speed > speedCap && ballModeRef.current !== BALL_MODES.ATTACHED) {
+      const scaleVelocity = speedCap / speed;
       vx *= scaleVelocity;
       vy *= scaleVelocity;
       vz *= scaleVelocity;
+      api.velocity.set(vx, vy, vz);
+    }
+
+    const groundThreshold = Math.max(scale, 0.55) + 0.08;
+    if (
+      ballModeRef.current === BALL_MODES.RELEASED &&
+      ballPositionRef.current[1] <= groundThreshold &&
+      previousVelocityRef.current[1] < -0.52 &&
+      vy > releaseProfileRef.current.minBounceSpeed &&
+      now - lastBounceAtMsRef.current > 70
+    ) {
+      lastBounceAtMsRef.current = now;
+      vx *= releaseProfileRef.current.horizontalDamping;
+      vy *= releaseProfileRef.current.bounceDamping;
+      vz *= releaseProfileRef.current.horizontalDamping;
       api.velocity.set(vx, vy, vz);
     }
 
@@ -990,15 +1270,22 @@ function SoccerBallModel(props) {
 
     if (ballModeRef.current === BALL_MODES.RELEASED && now >= releaseToLooseAtRef.current) {
       ballModeRef.current = BALL_MODES.LOOSE;
+      releaseProfileRef.current = BALL_RELEASE_PROFILES.loose;
     }
 
     if (ballModeRef.current === BALL_MODES.ATTACHED) {
       const possessor = currentPossession ? playersById[currentPossession.playerId] : null;
       if (!possessor) {
         ballModeRef.current = BALL_MODES.LOOSE;
+        releaseProfileRef.current = BALL_RELEASE_PROFILES.loose;
         clearPossession();
       } else {
         alignBallToActor(possessor);
+        const isProtectedKeeperPossession = possessor.role === PLAYER_ROLES.GOALKEEPER;
+        if (isProtectedKeeperPossession) {
+          contestCandidateRef.current = null;
+          return;
+        }
 
         const challengers = buildClaimCandidates(
           players,
@@ -1054,6 +1341,7 @@ function SoccerBallModel(props) {
       if (bestCandidate.distance <= BALL_OWNERSHIP_CONFIG.IMMEDIATE_CLAIM_RADIUS) {
         attachPossession(bestCandidate);
         alignBallToActor(bestCandidate);
+        releaseProfileRef.current = BALL_RELEASE_PROFILES.loose;
         claimCandidateRef.current = null;
         return;
       }
@@ -1072,8 +1360,11 @@ function SoccerBallModel(props) {
     ) {
       attachPossession(bestCandidate);
       alignBallToActor(bestCandidate);
+      releaseProfileRef.current = BALL_RELEASE_PROFILES.loose;
       claimCandidateRef.current = null;
     }
+
+    previousVelocityRef.current = [vx, vy, vz];
   });
   return (
     <group ref={ref} name={BALL_BODY_NAME} scale={[scale, scale, scale]}>

@@ -11,6 +11,19 @@ export const OUTFIELD_STATES = {
   RECOVER: "recover",
 };
 
+export const OUTFIELD_ASSIGNMENTS = {
+  PRIMARY_PRESS: "primary_press",
+  SECONDARY_COVER: "secondary_cover",
+  CARRIER: "carrier",
+  SUPPORT_RUN: "support_run",
+};
+
+export const BALL_ZONES = {
+  DEFENSIVE_THIRD: "defensive_third",
+  MIDFIELD: "midfield",
+  ATTACKING_THIRD: "attacking_third",
+};
+
 export const CPU_PHASES = {
   BUILD: "build",
   PRESS: "press",
@@ -99,7 +112,27 @@ function roleAllowsMode(teamId, isControlledPlayer, mode) {
   );
 }
 
-function choosePassTarget({ actor, actorState, teammates, opponents, targetGoal, config }) {
+function createShotTarget({ actor, actorState, targetGoal }) {
+  if (!targetGoal) {
+    return null;
+  }
+
+  const lateralOffset =
+    Math.abs(actorState.position[0]) <= 3
+      ? clamp(-(actor.attackLane || 0) * 9, -11.5, 11.5)
+      : clamp(-actorState.position[0] * 0.82, -11.5, 11.5);
+
+  return [targetGoal[0] + lateralOffset, targetGoal[1] || 0, targetGoal[2]];
+}
+
+function choosePassTarget({
+  actor,
+  actorState,
+  teammates,
+  opponents,
+  targetGoal,
+  config,
+}) {
   if (!targetGoal || teammates.length === 0) {
     return null;
   }
@@ -113,6 +146,7 @@ function choosePassTarget({ actor, actorState, teammates, opponents, targetGoal,
    *   targetPosition: number[],
    *   power: number,
    *   score: number,
+   *   forwardGain: number,
    * }} */
   let bestChoice = null;
 
@@ -145,11 +179,11 @@ function choosePassTarget({ actor, actorState, teammates, opponents, targetGoal,
     }, Number.POSITIVE_INFINITY);
 
     const score =
-      forwardGain * 0.085 +
-      widthGain * 0.04 +
-      nearestOpponent * 0.035 +
-      laneTension * 0.06 -
-      Math.abs(passDistance - 16) * 0.035;
+      forwardGain * 0.11 +
+      widthGain * 0.045 +
+      nearestOpponent * 0.04 +
+      laneTension * 0.07 -
+      Math.abs(passDistance - 16) * 0.03;
 
     if (!bestChoice || score > bestChoice.score) {
       bestChoice = {
@@ -158,8 +192,9 @@ function choosePassTarget({ actor, actorState, teammates, opponents, targetGoal,
         type: "pass",
         targetPlayerId: teammate.playerId,
         targetPosition: [...teammatePosition],
-        power: clamp(0.8 + passDistance / 26 + config.passRiskTolerance * 0.22, 0.7, 1.45),
+        power: clamp(0.84 + passDistance / 26 + config.passRiskTolerance * 0.22, 0.7, 1.45),
         score,
+        forwardGain,
       };
     }
   });
@@ -168,9 +203,8 @@ function choosePassTarget({ actor, actorState, teammates, opponents, targetGoal,
     return null;
   }
 
-  const resolvedChoice = bestChoice;
-  const requiredScore = 0.38 - config.passRiskTolerance * 0.1;
-  return resolvedChoice.score >= requiredScore ? resolvedChoice : null;
+  const requiredScore = 0.42 - config.passRiskTolerance * 0.08;
+  return bestChoice && bestChoice.score >= requiredScore ? bestChoice : null;
 }
 
 function shotConfidence({ actorState, opponents, targetGoal }) {
@@ -200,10 +234,8 @@ function computePhase({ teamId, possessionState, isCarrier, mode }) {
     if (isCarrier && (mode === OUTFIELD_STATES.SHOOT || mode === OUTFIELD_STATES.CARRY)) {
       return CPU_PHASES.ATTACK;
     }
-    if (mode === OUTFIELD_STATES.PASS || mode === OUTFIELD_STATES.RECEIVE) {
-      return CPU_PHASES.BUILD;
-    }
-    return CPU_PHASES.BUILD;
+
+    return mode === OUTFIELD_STATES.PASS ? CPU_PHASES.BUILD : CPU_PHASES.BUILD;
   }
 
   if (!possessionState?.teamId) {
@@ -221,7 +253,7 @@ function computePhase({ teamId, possessionState, isCarrier, mode }) {
   return CPU_PHASES.DEFEND_SHAPE;
 }
 
-function shouldRespectDwell(currentMode, nextMode, nowMs, lastTransitionAtMs) {
+function shouldRespectDwell(currentMode, nextMode, nowMs, lastTransitionAtMs, config) {
   if (currentMode === nextMode) {
     return false;
   }
@@ -234,7 +266,30 @@ function shouldRespectDwell(currentMode, nextMode, nowMs, lastTransitionAtMs) {
     return false;
   }
 
-  return nowMs - lastTransitionAtMs < AI_CONFIG.MIN_STATE_DURATION_MS;
+  return (
+    nowMs - lastTransitionAtMs <
+    Math.max(AI_CONFIG.MIN_STATE_DURATION_MS, Math.round(config.actionLockMs * 0.45))
+  );
+}
+
+function resolveAssignment({ actor, hasPossession, isCarrier, teamContext }) {
+  if (isCarrier) {
+    return OUTFIELD_ASSIGNMENTS.CARRIER;
+  }
+
+  if (hasPossession && teamContext?.supportRunnerId === actor.playerId) {
+    return OUTFIELD_ASSIGNMENTS.SUPPORT_RUN;
+  }
+
+  if (!hasPossession && teamContext?.primaryPresserId === actor.playerId) {
+    return OUTFIELD_ASSIGNMENTS.PRIMARY_PRESS;
+  }
+
+  if (!hasPossession && teamContext?.secondaryCoverId === actor.playerId) {
+    return OUTFIELD_ASSIGNMENTS.SECONDARY_COVER;
+  }
+
+  return null;
 }
 
 function createMovementTarget({
@@ -244,45 +299,70 @@ function createMovementTarget({
   ballSnapshot,
   teammates,
   mode,
+  assignment,
   targetGoal,
   ownGoal,
   config,
-  isPrimaryPresser,
+  teamContext,
 }) {
   const attackDirection = attackDirectionFromGoal(targetGoal);
   const ballPosition = ballSnapshot?.position || [0, 0, 0];
-  const carrier = teammates.find((player) => player.playerId === possessionState?.playerId) || null;
+  const teamCarrier =
+    teammates.find((player) => player.playerId === possessionState?.playerId) || null;
   const homePosition = actor.spawnPosition;
-  const carrierPosition = carrier?.position || ballPosition;
+  const carrierPosition = teamCarrier?.position || ballPosition;
   const supportWidth = actor.attackLane * 18;
-  const supportDepth = attackDirection * AI_CONFIG.SUPPORT_DISTANCE * config.supportResponsiveness;
+  const supportDepth = attackDirection * (config.supportRunDepth || AI_CONFIG.SUPPORT_DISTANCE);
+  const compactness = clamp(config.secondaryPressCompactness || 0.6, 0.25, 0.9);
+  const ballZone = teamContext?.ballZone || BALL_ZONES.MIDFIELD;
+  const committedCarryDepth =
+    ballZone === BALL_ZONES.ATTACKING_THIRD ? 10 : AI_CONFIG.CARRY_DISTANCE + 2;
 
   switch (mode) {
     case OUTFIELD_STATES.PRESS:
-      return clampFieldPosition(isPrimaryPresser ? carrierPosition : ballPosition);
+      return clampFieldPosition([
+        carrierPosition[0] * 0.92,
+        0,
+        carrierPosition[2] - attackDirection * 0.9,
+      ]);
     case OUTFIELD_STATES.RECOVER:
+      if (assignment === OUTFIELD_ASSIGNMENTS.SECONDARY_COVER) {
+        return clampFieldPosition([
+          carrierPosition[0] * (0.36 + (1 - compactness) * 0.16) +
+            homePosition[0] * (0.44 + compactness * 0.18),
+          0,
+          carrierPosition[2] - attackDirection * (6 + compactness * 4),
+        ]);
+      }
       return clampFieldPosition([
         homePosition[0] * 0.8,
         0,
         homePosition[2] * 0.8 + ballPosition[2] * 0.2,
       ]);
     case OUTFIELD_STATES.SUPPORT:
+    case OUTFIELD_STATES.RECEIVE:
+      if (assignment === OUTFIELD_ASSIGNMENTS.SUPPORT_RUN) {
+        const widthBias = actor.attackLane * (16 + compactness * 6);
+        const depthBias =
+          supportDepth + (mode === OUTFIELD_STATES.RECEIVE ? 3 : 0) + (ballZone === BALL_ZONES.ATTACKING_THIRD ? 4 : 0);
+        return clampFieldPosition([
+          carrierPosition[0] * 0.22 + widthBias,
+          0,
+          carrierPosition[2] + depthBias,
+        ]);
+      }
       return clampFieldPosition([
         carrierPosition[0] * 0.38 + supportWidth,
         0,
         carrierPosition[2] + supportDepth * 0.65,
       ]);
-    case OUTFIELD_STATES.RECEIVE:
-      return clampFieldPosition([
-        carrierPosition[0] * 0.28 + supportWidth * 0.9,
-        0,
-        carrierPosition[2] + attackDirection * AI_CONFIG.RECEIVE_DISTANCE,
-      ]);
     case OUTFIELD_STATES.CARRY:
       return clampFieldPosition([
-        actorState.position[0] * 0.72 + actor.attackLane * 8,
+        actorState.position[0] * 0.64 +
+          actor.attackLane * 5 +
+          clamp((targetGoal?.[0] || 0) - actorState.position[0], -8, 8) * 0.2,
         0,
-        actorState.position[2] + attackDirection * AI_CONFIG.CARRY_DISTANCE,
+        actorState.position[2] + attackDirection * committedCarryDepth,
       ]);
     case OUTFIELD_STATES.HOLD_SHAPE:
     default:
@@ -297,6 +377,7 @@ function createMovementTarget({
 export function createInitialOutfieldAiState(homePosition = AI_CONFIG.IDLE_HOME_POSITION) {
   return {
     mode: OUTFIELD_STATES.HOLD_SHAPE,
+    assignment: null,
     targetPosition: [...homePosition],
     homePosition: [...homePosition],
     targetPlayerId: null,
@@ -315,6 +396,7 @@ export function deriveCpuPhaseLabel({ teamId, possessionState, aiStates = [] }) 
     ) {
       return CPU_PHASES.ATTACK;
     }
+
     return aiStates.some((state) => state?.mode === OUTFIELD_STATES.PASS)
       ? CPU_PHASES.BUILD
       : CPU_PHASES.BUILD;
@@ -339,6 +421,7 @@ export function updateOutfieldController({
   nowMs,
   deltaSeconds,
   difficulty,
+  aiPaceMultiplier = 1,
   actor,
   playerState,
   aiState,
@@ -348,6 +431,7 @@ export function updateOutfieldController({
   possessionState,
   targetGoal,
   ownGoal,
+  teamContext = null,
   isControlledPlayer = false,
 }) {
   const config = difficultyConfig(difficulty);
@@ -356,28 +440,14 @@ export function updateOutfieldController({
   const currentMode = aiState?.mode || OUTFIELD_STATES.HOLD_SHAPE;
   const hasPossession = possessionState?.teamId === actor.teamId;
   const isCarrier = possessionState?.playerId === actor.playerId;
-  const opposingCarrierId =
-    possessionState?.teamId && possessionState.teamId !== actor.teamId
-      ? possessionState.playerId
-      : null;
-  const opposingCarrier = opponents.find((player) => player.playerId === opposingCarrierId) || null;
-  const carrierPosition = opposingCarrier?.position || ballSnapshot?.position || [0, 0, 0];
-  const nearestTeammateToCarrierId = opponents.length > 0
-    ? teammates
-        .concat([{ ...actor, position: currentPosition }])
-        .reduce((closest, teammate) => {
-          const teammatePosition = teammate.position || teammate.spawnPosition;
-          if (!closest) {
-            return teammate;
-          }
-          const closestPosition = closest.position || closest.spawnPosition;
-          return distance2D(teammatePosition, carrierPosition) <
-            distance2D(closestPosition, carrierPosition)
-            ? teammate
-            : closest;
-        }, null)?.playerId
-    : actor.playerId;
-  const isPrimaryPresser = nearestTeammateToCarrierId === actor.playerId;
+  const assignment = resolveAssignment({
+    actor,
+    hasPossession,
+    isCarrier,
+    teamContext,
+  });
+  const activeActionLock = teamContext?.actionLocks?.[actor.playerId];
+  const hasActionLock = activeActionLock?.expiresAtMs > nowMs;
   let nextMode = currentMode;
   let actionCommand = null;
   let nextTargetPlayerId = null;
@@ -386,23 +456,42 @@ export function updateOutfieldController({
   if (!ballSnapshot) {
     nextMode = OUTFIELD_STATES.HOLD_SHAPE;
   } else if (isCarrier) {
+    const actorState = { ...playerState, position: currentPosition };
+    const attackingThird =
+      teamContext?.ballZone === BALL_ZONES.ATTACKING_THIRD ||
+      goalDistance(currentPosition, targetGoal) <= config.attackCommitmentDistance;
     const passChoice = choosePassTarget({
       actor,
-      actorState: { ...playerState, position: currentPosition },
+      actorState,
       teammates,
       opponents,
       targetGoal,
       config,
     });
+    const forwardPassChoice =
+      passChoice && passChoice.forwardGain >= (attackingThird ? 7 : 4) ? passChoice : null;
     const confidence = shotConfidence({
-      actorState: { ...playerState, position: currentPosition },
+      actorState,
       opponents,
       targetGoal,
     });
+    const shotTarget = createShotTarget({ actor, actorState, targetGoal });
     const canShoot =
-      goalDistance(currentPosition, targetGoal) <= AI_CONFIG.SHOOT_DISTANCE &&
+      shotTarget &&
+      goalDistance(currentPosition, targetGoal) <= config.attackCommitmentDistance &&
       confidence >= config.shotConfidenceThreshold &&
       nowMs >= actionCooldownUntilMs;
+    const shouldKeepCarrying =
+      hasActionLock &&
+      activeActionLock.mode === OUTFIELD_STATES.CARRY &&
+      attackingThird &&
+      (!forwardPassChoice || forwardPassChoice.forwardGain < 12);
+    const shouldHonorLockedPass =
+      hasActionLock &&
+      activeActionLock.mode === OUTFIELD_STATES.PASS &&
+      forwardPassChoice &&
+      (!activeActionLock.targetPlayerId ||
+        activeActionLock.targetPlayerId === forwardPassChoice.targetPlayerId);
 
     if (canShoot) {
       nextMode = OUTFIELD_STATES.SHOOT;
@@ -412,18 +501,22 @@ export function updateOutfieldController({
         teamId: actor.teamId,
         type: "shot",
         targetPlayerId: null,
-        targetPosition: [...targetGoal],
-        power: clamp(1.05 + confidence * 0.18, 0.95, 1.25),
+        targetPosition: shotTarget,
+        power: clamp(1.08 + confidence * 0.2, 1, 1.28),
       };
-      actionCooldownUntilMs = nowMs + Math.max(480, config.reactionMs * 1.2);
-    } else if (passChoice && nowMs >= actionCooldownUntilMs) {
+      actionCooldownUntilMs = nowMs + Math.max(480, config.reactionMs * 1.15);
+    } else if (
+      forwardPassChoice &&
+      nowMs >= actionCooldownUntilMs &&
+      (!shouldKeepCarrying || shouldHonorLockedPass)
+    ) {
       nextMode = OUTFIELD_STATES.PASS;
-      nextTargetPlayerId = passChoice.targetPlayerId;
+      nextTargetPlayerId = forwardPassChoice.targetPlayerId;
       actionCommand = {
-        ...passChoice,
-        id: `cpu-pass-${actor.playerId}-${passChoice.targetPlayerId}-${nowMs}`,
+        ...forwardPassChoice,
+        id: `cpu-pass-${actor.playerId}-${forwardPassChoice.targetPlayerId}-${nowMs}`,
       };
-      actionCooldownUntilMs = nowMs + Math.max(420, config.reactionMs * 1.05);
+      actionCooldownUntilMs = nowMs + Math.max(420, config.reactionMs);
     } else {
       nextMode = OUTFIELD_STATES.CARRY;
     }
@@ -438,26 +531,39 @@ export function updateOutfieldController({
     });
 
     nextTargetPlayerId = passTarget?.targetPlayerId || null;
-    nextMode = passTarget ? OUTFIELD_STATES.RECEIVE : OUTFIELD_STATES.SUPPORT;
+    nextMode =
+      assignment === OUTFIELD_ASSIGNMENTS.SUPPORT_RUN && passTarget?.forwardGain >= 4
+        ? OUTFIELD_STATES.RECEIVE
+        : OUTFIELD_STATES.SUPPORT;
   } else if (possessionState?.teamId) {
-    nextMode = isPrimaryPresser ? OUTFIELD_STATES.PRESS : OUTFIELD_STATES.RECOVER;
+    nextMode =
+      assignment === OUTFIELD_ASSIGNMENTS.PRIMARY_PRESS
+        ? OUTFIELD_STATES.PRESS
+        : OUTFIELD_STATES.RECOVER;
   } else {
     const ballDistance = distance2D(currentPosition, ballSnapshot.position);
     nextMode =
-      ballDistance <= config.chaseRange * 0.25 || isPrimaryPresser
-        ? OUTFIELD_STATES.RECOVER
-        : OUTFIELD_STATES.HOLD_SHAPE;
+      assignment === OUTFIELD_ASSIGNMENTS.PRIMARY_PRESS ||
+      ballDistance <= config.chaseRange * 0.22
+        ? OUTFIELD_STATES.PRESS
+        : OUTFIELD_STATES.RECOVER;
   }
 
+  let nextAssignment = assignment;
   if (!roleAllowsMode(actor.teamId, isControlledPlayer, nextMode)) {
     nextMode = hasPossession ? OUTFIELD_STATES.SUPPORT : OUTFIELD_STATES.RECOVER;
+    nextAssignment =
+      hasPossession && assignment === OUTFIELD_ASSIGNMENTS.SUPPORT_RUN
+        ? OUTFIELD_ASSIGNMENTS.SUPPORT_RUN
+        : null;
     actionCommand = null;
     nextTargetPlayerId = null;
   }
 
   const lastTransitionAtMs = aiState?.lastTransitionAtMs || 0;
-  if (shouldRespectDwell(currentMode, nextMode, nowMs, lastTransitionAtMs)) {
+  if (shouldRespectDwell(currentMode, nextMode, nowMs, lastTransitionAtMs, config)) {
     nextMode = currentMode;
+    nextAssignment = aiState?.assignment || nextAssignment;
     actionCommand = null;
     nextTargetPlayerId = aiState?.targetPlayerId || null;
   }
@@ -469,10 +575,11 @@ export function updateOutfieldController({
     ballSnapshot,
     teammates,
     mode: nextMode,
+    assignment: nextAssignment,
     targetGoal,
     ownGoal,
     config,
-    isPrimaryPresser,
+    teamContext,
   });
   const direction = normalize2D([
     movementTarget[0] - currentPosition[0],
@@ -484,19 +591,33 @@ export function updateOutfieldController({
       : nextMode === OUTFIELD_STATES.RECOVER
         ? config.recoverySpeedMultiplier
         : config.supportResponsiveness;
-  const runSpeed = actor.baseRunSpeed * config.maxRunSpeedMultiplier * speedMultiplier;
+  const resolvedAiPaceMultiplier = Number.isFinite(aiPaceMultiplier) ? aiPaceMultiplier : 1;
+  const runSpeed =
+    actor.baseRunSpeed *
+    config.maxRunSpeedMultiplier *
+    speedMultiplier *
+    resolvedAiPaceMultiplier;
   const nextPosition = clampFieldPosition([
     currentPosition[0] + direction[0] * runSpeed * deltaSeconds,
     0,
     currentPosition[2] + direction[1] * runSpeed * deltaSeconds,
   ]);
-  const targetYaw = yawTowards(
-    currentPosition,
-    actionCommand?.targetPosition || movementTarget
-  );
+  const targetYaw = yawTowards(currentPosition, actionCommand?.targetPosition || movementTarget);
+
+  const nextActionLock =
+    actor.teamId === TEAM_IDS.TEAM_TWO &&
+    isCarrier &&
+    [OUTFIELD_STATES.CARRY, OUTFIELD_STATES.PASS, OUTFIELD_STATES.SHOOT].includes(nextMode)
+      ? {
+          mode: nextMode,
+          targetPlayerId: nextTargetPlayerId,
+          expiresAtMs: nowMs + config.actionLockMs,
+        }
+      : null;
 
   return {
     mode: nextMode,
+    assignment: nextAssignment,
     targetPosition: movementTarget,
     homePosition: [...actor.spawnPosition],
     targetPlayerId: nextTargetPlayerId,
@@ -504,6 +625,7 @@ export function updateOutfieldController({
     nextPosition,
     nextRotation: [0, Number.isFinite(targetYaw) ? targetYaw : currentRotation[1], 0],
     actionCommand,
+    actionLock: nextActionLock,
     phase: computePhase({
       teamId: actor.teamId,
       possessionState,

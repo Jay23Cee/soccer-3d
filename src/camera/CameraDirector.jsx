@@ -33,6 +33,8 @@ function averagePositions(points) {
 
 function modeFov(mode) {
   switch (mode) {
+    case CAMERA_CONFIG.MODES.LANDING_HERO:
+      return CAMERA_CONFIG.FOV.LANDING_HERO;
     case CAMERA_CONFIG.MODES.BROADCAST_WIDE:
       return CAMERA_CONFIG.FOV.BROADCAST_WIDE;
     case CAMERA_CONFIG.MODES.PLAYER_CHASE:
@@ -57,6 +59,8 @@ function modeFov(mode) {
       return CAMERA_CONFIG.FOV.SAVE;
     case CAMERA_CONFIG.MODES.REPLAY:
       return CAMERA_CONFIG.FOV.REPLAY;
+    case CAMERA_CONFIG.MODES.END_ORBIT:
+      return CAMERA_CONFIG.FOV.END_ORBIT;
     default:
       return CAMERA_CONFIG.FOV.BUILD_UP;
   }
@@ -64,6 +68,8 @@ function modeFov(mode) {
 
 function getModeTarget(mode, focus, playersCenter, keepersCenter) {
   switch (mode) {
+    case CAMERA_CONFIG.MODES.LANDING_HERO:
+      return [...CAMERA_CONFIG.LANDING_HERO.TARGET];
     case CAMERA_CONFIG.MODES.BROADCAST_WIDE:
       return [
         focus[0] * 0.55 + playersCenter[0] * 0.3 + keepersCenter[0] * 0.15,
@@ -95,6 +101,8 @@ function getModeTarget(mode, focus, playersCenter, keepersCenter) {
 
 function getModeCameraPosition(mode, target, focus) {
   switch (mode) {
+    case CAMERA_CONFIG.MODES.LANDING_HERO:
+      return [...CAMERA_CONFIG.LANDING_HERO.BASE_POSITION];
     case CAMERA_CONFIG.MODES.BROADCAST_WIDE:
       return [target[0] + 88, CAMERA_CONFIG.BASE_HEIGHT + 6, target[2] + 108];
     case CAMERA_CONFIG.MODES.PLAYER_CHASE:
@@ -135,6 +143,43 @@ function applyGoalReplayZoom(position, target) {
   ];
 }
 
+function endPresentationTarget() {
+  return [...CAMERA_CONFIG.END_PRESENTATION.TARGET];
+}
+
+function landingHeroTarget() {
+  return [...CAMERA_CONFIG.LANDING_HERO.TARGET];
+}
+
+function landingHeroCameraPosition(elapsedTimeMs, prefersReducedMotion) {
+  if (prefersReducedMotion) {
+    return [...CAMERA_CONFIG.LANDING_HERO.BASE_POSITION];
+  }
+
+  const elapsedSeconds = elapsedTimeMs / 1000;
+  const basePosition = CAMERA_CONFIG.LANDING_HERO.BASE_POSITION;
+  return [
+    basePosition[0] + Math.sin(elapsedSeconds * CAMERA_CONFIG.LANDING_HERO.DRIFT_SPEED) * CAMERA_CONFIG.LANDING_HERO.DRIFT_X,
+    basePosition[1] + Math.sin(elapsedSeconds * CAMERA_CONFIG.LANDING_HERO.DRIFT_SPEED * 0.7) * CAMERA_CONFIG.LANDING_HERO.DRIFT_Y,
+    basePosition[2] + Math.cos(elapsedSeconds * CAMERA_CONFIG.LANDING_HERO.DRIFT_DEPTH_SPEED) * CAMERA_CONFIG.LANDING_HERO.DRIFT_Z,
+  ];
+}
+
+function endPresentationCameraPosition(elapsedTimeMs, prefersReducedMotion) {
+  if (prefersReducedMotion) {
+    return [...CAMERA_CONFIG.END_PRESENTATION.STATIC_POSITION];
+  }
+
+  const orbitAngle = (elapsedTimeMs / 1000) * CAMERA_CONFIG.END_PRESENTATION.ORBIT_SPEED;
+  const [targetX, , targetZ] = CAMERA_CONFIG.END_PRESENTATION.TARGET;
+
+  return [
+    targetX + Math.cos(orbitAngle) * CAMERA_CONFIG.END_PRESENTATION.ORBIT_RADIUS,
+    CAMERA_CONFIG.END_PRESENTATION.ORBIT_HEIGHT,
+    targetZ + Math.sin(orbitAngle) * CAMERA_CONFIG.END_PRESENTATION.ORBIT_RADIUS,
+  ];
+}
+
 function introCamera(introProgress) {
   return [
     lerp(INTRO_CONFIG.CAMERA_START[0], INTRO_CONFIG.CAMERA_END[0], introProgress),
@@ -156,6 +201,7 @@ function CameraDirector({
   introProgress,
   gameState,
   cameraNudge = [0, 0, 0],
+  prefersReducedMotion = false,
   onCameraStateChange,
 }) {
   const smoothedRef = useRef({
@@ -186,6 +232,8 @@ function CameraDirector({
     const focus = replayFrame?.ball?.position || ballPosition || [0, 0, 0];
     const targetMode = mode || CAMERA_CONFIG.MODES.BROADCAST_WIDE;
     const freeRoamActive = targetMode === CAMERA_CONFIG.MODES.FREE_ROAM && gameState !== "intro";
+    const effectiveCameraNudge =
+      targetMode === CAMERA_CONFIG.MODES.END_ORBIT ? [0, 0, 0] : cameraNudge;
     if (freeRoamActive) {
       const livePosition = [
         Number.isFinite(camera.position?.x)
@@ -220,6 +268,96 @@ function CameraDirector({
       return;
     }
 
+    if (targetMode === CAMERA_CONFIG.MODES.END_ORBIT) {
+      const desiredTarget = endPresentationTarget();
+      const desiredPosition = endPresentationCameraPosition(nowMs, prefersReducedMotion);
+
+      smoothedRef.current.position = lerpVector(
+        smoothedRef.current.position,
+        desiredPosition,
+        CAMERA_CONFIG.TRANSITION_ALPHA
+      );
+      smoothedRef.current.target = lerpVector(
+        smoothedRef.current.target,
+        desiredTarget,
+        CAMERA_CONFIG.TRANSITION_ALPHA
+      );
+      smoothedRef.current.fov = lerp(
+        smoothedRef.current.fov,
+        modeFov(CAMERA_CONFIG.MODES.END_ORBIT),
+        CAMERA_CONFIG.TRANSITION_ALPHA
+      );
+
+      camera.position.set(
+        smoothedRef.current.position[0],
+        smoothedRef.current.position[1],
+        smoothedRef.current.position[2]
+      );
+      camera.lookAt(
+        smoothedRef.current.target[0],
+        smoothedRef.current.target[1],
+        smoothedRef.current.target[2]
+      );
+      camera.fov = smoothedRef.current.fov;
+      camera.updateProjectionMatrix();
+
+      if (onCameraStateChange && nowMs - smoothedRef.current.lastEmitAtMs > 100) {
+        smoothedRef.current.lastEmitAtMs = nowMs;
+        onCameraStateChange({
+          mode: targetMode,
+          position: [...smoothedRef.current.position],
+          target: [...smoothedRef.current.target],
+          fov: smoothedRef.current.fov,
+        });
+      }
+      return;
+    }
+
+    if (targetMode === CAMERA_CONFIG.MODES.LANDING_HERO) {
+      const desiredTarget = landingHeroTarget();
+      const desiredPosition = landingHeroCameraPosition(nowMs, prefersReducedMotion);
+
+      smoothedRef.current.position = lerpVector(
+        smoothedRef.current.position,
+        desiredPosition,
+        CAMERA_CONFIG.TRANSITION_ALPHA
+      );
+      smoothedRef.current.target = lerpVector(
+        smoothedRef.current.target,
+        desiredTarget,
+        CAMERA_CONFIG.TRANSITION_ALPHA
+      );
+      smoothedRef.current.fov = lerp(
+        smoothedRef.current.fov,
+        modeFov(CAMERA_CONFIG.MODES.LANDING_HERO),
+        CAMERA_CONFIG.TRANSITION_ALPHA
+      );
+
+      camera.position.set(
+        smoothedRef.current.position[0],
+        smoothedRef.current.position[1],
+        smoothedRef.current.position[2]
+      );
+      camera.lookAt(
+        smoothedRef.current.target[0],
+        smoothedRef.current.target[1],
+        smoothedRef.current.target[2]
+      );
+      camera.fov = smoothedRef.current.fov;
+      camera.updateProjectionMatrix();
+
+      if (onCameraStateChange && nowMs - smoothedRef.current.lastEmitAtMs > 100) {
+        smoothedRef.current.lastEmitAtMs = nowMs;
+        onCameraStateChange({
+          mode: targetMode,
+          position: [...smoothedRef.current.position],
+          target: [...smoothedRef.current.target],
+          fov: smoothedRef.current.fov,
+        });
+      }
+      return;
+    }
+
     const effectiveFocus =
       (targetMode === CAMERA_CONFIG.MODES.BEHIND_PLAYER_WEST ||
         targetMode === CAMERA_CONFIG.MODES.PLAYER_CHASE) &&
@@ -238,16 +376,20 @@ function CameraDirector({
             ),
           ]
         : focus;
-    const desiredTarget = getModeTarget(
-      targetMode,
-      [
-        effectiveFocus[0],
-        4 + clamp(Math.abs(effectiveFocus[1]) * 0.25, 0, 5),
-        effectiveFocus[2],
-      ],
-      centers.playersCenter,
-      centers.keepersCenter
-    );
+    const focusTarget = [
+      effectiveFocus[0],
+      4 + clamp(Math.abs(effectiveFocus[1]) * 0.25, 0, 5),
+      effectiveFocus[2],
+    ];
+    const replayTarget = Array.isArray(replayFrame?.cameraTarget) ? replayFrame.cameraTarget : null;
+    const desiredTarget =
+      targetMode === CAMERA_CONFIG.MODES.REPLAY
+        ? [
+            replayTarget?.[0] ?? focusTarget[0],
+            replayTarget?.[1] ?? focusTarget[1],
+            replayTarget?.[2] ?? focusTarget[2],
+          ]
+        : getModeTarget(targetMode, focusTarget, centers.playersCenter, centers.keepersCenter);
     const desiredPosition =
       gameState === "intro"
         ? introCamera(introProgress || 0)
@@ -273,9 +415,9 @@ function CameraDirector({
     smoothedRef.current.fov = lerp(smoothedRef.current.fov, targetFov, alpha);
 
     camera.position.set(
-      smoothedRef.current.position[0] + cameraNudge[0],
-      smoothedRef.current.position[1] + cameraNudge[1],
-      smoothedRef.current.position[2] + cameraNudge[2]
+      smoothedRef.current.position[0] + effectiveCameraNudge[0],
+      smoothedRef.current.position[1] + effectiveCameraNudge[1],
+      smoothedRef.current.position[2] + effectiveCameraNudge[2]
     );
     camera.lookAt(
       smoothedRef.current.target[0],

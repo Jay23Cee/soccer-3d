@@ -80,18 +80,21 @@ describe("CameraDirector", () => {
     expect(camera.updateProjectionMatrix).toHaveBeenCalled();
   });
 
-  it("keeps user-selected camera mode when replay is active", () => {
+  it("uses replay mode telemetry and follows replay frame camera target", () => {
     const onCameraStateChange = vi.fn();
     const camera = createMockCamera();
 
     render(
       <CameraDirector
         cameraRef={{ current: camera }}
-        mode={CAMERA_CONFIG.MODES.BROADCAST_WIDE}
+        mode={CAMERA_CONFIG.MODES.REPLAY}
         ballPosition={[0, 0, 0]}
         playerPositions={[[0, 0, 0]]}
         goalkeeperPositions={[[0, 0, 0]]}
-        replayFrame={{ ball: { position: [4, 1, -6] } }}
+        replayFrame={{
+          ball: { position: [4, 1, -6] },
+          cameraTarget: [18, 7, -14],
+        }}
         isReplay
         introProgress={0}
         gameState="in_play"
@@ -99,10 +102,15 @@ describe("CameraDirector", () => {
       />
     );
 
-    tickFrame(0.2);
+    for (let step = 0; step < 30; step += 1) {
+      tickFrame(0.2 + step * 0.05);
+    }
 
-    expect(onCameraStateChange).toHaveBeenCalledTimes(1);
-    expect(onCameraStateChange.mock.calls[0][0].mode).toBe(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
+    const replayState = latestCameraState(onCameraStateChange);
+    expect(replayState.mode).toBe(CAMERA_CONFIG.MODES.REPLAY);
+    expect(replayState.target[0]).toBeCloseTo(18, 0);
+    expect(replayState.target[1]).toBeCloseTo(7, 0);
+    expect(replayState.target[2]).toBeCloseTo(-14, 0);
   });
 
   it("applies tighter framing during goal replays", () => {
@@ -111,11 +119,14 @@ describe("CameraDirector", () => {
     const saveReplayRender = render(
       <CameraDirector
         cameraRef={{ current: saveReplayCamera }}
-        mode={CAMERA_CONFIG.MODES.BROADCAST_WIDE}
+        mode={CAMERA_CONFIG.MODES.REPLAY}
         ballPosition={[8, 1, -12]}
         playerPositions={[[0, 0, 0], [18, 0, 12]]}
         goalkeeperPositions={[[0, 0, -70], [0, 0, 70]]}
-        replayFrame={{ ball: { position: [8, 1, -12] } }}
+        replayFrame={{
+          ball: { position: [8, 1, -12] },
+          cameraTarget: [6, 7, -10],
+        }}
         isReplay
         replayEventType="save"
         introProgress={0}
@@ -136,11 +147,14 @@ describe("CameraDirector", () => {
     render(
       <CameraDirector
         cameraRef={{ current: goalReplayCamera }}
-        mode={CAMERA_CONFIG.MODES.BROADCAST_WIDE}
+        mode={CAMERA_CONFIG.MODES.REPLAY}
         ballPosition={[8, 1, -12]}
         playerPositions={[[0, 0, 0], [18, 0, 12]]}
         goalkeeperPositions={[[0, 0, -70], [0, 0, 70]]}
-        replayFrame={{ ball: { position: [8, 1, -12] } }}
+        replayFrame={{
+          ball: { position: [8, 1, -12] },
+          cameraTarget: [6, 7, -10],
+        }}
         isReplay
         replayEventType="goal"
         introProgress={0}
@@ -166,11 +180,14 @@ describe("CameraDirector", () => {
     const baselineReplayRender = render(
       <CameraDirector
         cameraRef={{ current: baselineReplayCamera }}
-        mode={CAMERA_CONFIG.MODES.BROADCAST_WIDE}
+        mode={CAMERA_CONFIG.MODES.REPLAY}
         ballPosition={[8, 1, -12]}
         playerPositions={[[0, 0, 0], [18, 0, 12]]}
         goalkeeperPositions={[[0, 0, -70], [0, 0, 70]]}
-        replayFrame={{ ball: { position: [8, 1, -12] } }}
+        replayFrame={{
+          ball: { position: [8, 1, -12] },
+          cameraTarget: [6, 7, -10],
+        }}
         isReplay
         introProgress={0}
         gameState="in_play"
@@ -190,11 +207,14 @@ describe("CameraDirector", () => {
     render(
       <CameraDirector
         cameraRef={{ current: saveReplayCamera }}
-        mode={CAMERA_CONFIG.MODES.BROADCAST_WIDE}
+        mode={CAMERA_CONFIG.MODES.REPLAY}
         ballPosition={[8, 1, -12]}
         playerPositions={[[0, 0, 0], [18, 0, 12]]}
         goalkeeperPositions={[[0, 0, -70], [0, 0, 70]]}
-        replayFrame={{ ball: { position: [8, 1, -12] } }}
+        replayFrame={{
+          ball: { position: [8, 1, -12] },
+          cameraTarget: [6, 7, -10],
+        }}
         isReplay
         replayEventType="save"
         introProgress={0}
@@ -208,10 +228,8 @@ describe("CameraDirector", () => {
     }
 
     const saveReplayState = latestCameraState(saveReplayStateChange);
-    expect(saveReplayState.fov).toBeCloseTo(baselineReplayState.fov, 4);
-    expect(saveReplayState.position[0]).toBeCloseTo(baselineReplayState.position[0], 1);
-    expect(saveReplayState.position[1]).toBeCloseTo(baselineReplayState.position[1], 1);
-    expect(saveReplayState.position[2]).toBeCloseTo(baselineReplayState.position[2], 1);
+    expect(saveReplayState.fov).toBeCloseTo(baselineReplayState.fov, 1);
+    expect(distanceBetween(saveReplayState.position, baselineReplayState.position)).toBeLessThan(1);
   });
 
   it("does not force camera position while in free roam mode", () => {
@@ -240,6 +258,43 @@ describe("CameraDirector", () => {
     expect(onCameraStateChange.mock.calls[0][0].mode).toBe(CAMERA_CONFIG.MODES.FREE_ROAM);
   });
 
+  it("uses the landing hero camera target and drifts over midfield while idle", () => {
+    const onCameraStateChange = vi.fn();
+    const camera = createMockCamera();
+
+    render(
+      <CameraDirector
+        cameraRef={{ current: camera }}
+        mode={CAMERA_CONFIG.MODES.LANDING_HERO}
+        ballPosition={[0, 0, 0]}
+        playerPositions={[[0, 0, 0]]}
+        goalkeeperPositions={[[0, 0, 0]]}
+        replayFrame={null}
+        isReplay={false}
+        introProgress={0}
+        gameState="idle"
+        onCameraStateChange={onCameraStateChange}
+      />
+    );
+
+    for (let step = 0; step < 30; step += 1) {
+      tickFrame(0.2 + step * 0.08);
+    }
+
+    const firstLandingState = latestCameraState(onCameraStateChange);
+
+    for (let step = 0; step < 30; step += 1) {
+      tickFrame(4 + step * 0.08);
+    }
+
+    const laterLandingState = latestCameraState(onCameraStateChange);
+    expect(laterLandingState.mode).toBe(CAMERA_CONFIG.MODES.LANDING_HERO);
+    expect(laterLandingState.target[0]).toBeCloseTo(CAMERA_CONFIG.LANDING_HERO.TARGET[0], 0);
+    expect(laterLandingState.target[1]).toBeCloseTo(CAMERA_CONFIG.LANDING_HERO.TARGET[1], 0);
+    expect(laterLandingState.target[2]).toBeCloseTo(CAMERA_CONFIG.LANDING_HERO.TARGET[2], 0);
+    expect(distanceBetween(firstLandingState.position, laterLandingState.position)).toBeGreaterThan(2);
+  });
+
   it("emits broadcast-wide mode and updates camera transforms", () => {
     const onCameraStateChange = vi.fn();
     const camera = createMockCamera();
@@ -265,6 +320,79 @@ describe("CameraDirector", () => {
     expect(camera.position.set).toHaveBeenCalled();
     expect(onCameraStateChange).toHaveBeenCalled();
     expect(onCameraStateChange.mock.calls.at(-1)[0].mode).toBe(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
+  });
+
+  it("keeps the full-time end orbit centered on the presentation target while orbiting", () => {
+    const onCameraStateChange = vi.fn();
+    const camera = createMockCamera();
+
+    render(
+      <CameraDirector
+        cameraRef={{ current: camera }}
+        mode={CAMERA_CONFIG.MODES.END_ORBIT}
+        ballPosition={[12, 0, -18]}
+        playerPositions={[[0, 0, 0], [18, 0, 12]]}
+        goalkeeperPositions={[[0, 0, -70], [0, 0, 70]]}
+        replayFrame={null}
+        isReplay={false}
+        introProgress={0}
+        gameState="ended"
+        onCameraStateChange={onCameraStateChange}
+      />
+    );
+
+    for (let step = 0; step < 36; step += 1) {
+      tickFrame(0.2 + step * 0.08);
+    }
+    const firstOrbitState = latestCameraState(onCameraStateChange);
+
+    for (let step = 0; step < 36; step += 1) {
+      tickFrame(4 + step * 0.08);
+    }
+    const laterOrbitState = latestCameraState(onCameraStateChange);
+
+    expect(laterOrbitState.mode).toBe(CAMERA_CONFIG.MODES.END_ORBIT);
+    expect(laterOrbitState.target[0]).toBeCloseTo(CAMERA_CONFIG.END_PRESENTATION.TARGET[0], 0);
+    expect(laterOrbitState.target[1]).toBeCloseTo(CAMERA_CONFIG.END_PRESENTATION.TARGET[1], 0);
+    expect(laterOrbitState.target[2]).toBeCloseTo(CAMERA_CONFIG.END_PRESENTATION.TARGET[2], 0);
+    expect(distanceBetween(firstOrbitState.position, laterOrbitState.position)).toBeGreaterThan(8);
+  });
+
+  it("keeps the full-time camera static for reduced-motion users", () => {
+    const onCameraStateChange = vi.fn();
+    const camera = createMockCamera();
+
+    render(
+      <CameraDirector
+        cameraRef={{ current: camera }}
+        mode={CAMERA_CONFIG.MODES.END_ORBIT}
+        ballPosition={[12, 0, -18]}
+        playerPositions={[[0, 0, 0], [18, 0, 12]]}
+        goalkeeperPositions={[[0, 0, -70], [0, 0, 70]]}
+        replayFrame={null}
+        isReplay={false}
+        introProgress={0}
+        gameState="ended"
+        prefersReducedMotion
+        onCameraStateChange={onCameraStateChange}
+      />
+    );
+
+    for (let step = 0; step < 40; step += 1) {
+      tickFrame(0.2 + step * 0.08);
+    }
+    const firstStaticState = latestCameraState(onCameraStateChange);
+
+    for (let step = 0; step < 40; step += 1) {
+      tickFrame(5 + step * 0.08);
+    }
+    const laterStaticState = latestCameraState(onCameraStateChange);
+
+    expect(laterStaticState.mode).toBe(CAMERA_CONFIG.MODES.END_ORBIT);
+    expect(laterStaticState.target[0]).toBeCloseTo(CAMERA_CONFIG.END_PRESENTATION.TARGET[0], 0);
+    expect(laterStaticState.target[1]).toBeCloseTo(CAMERA_CONFIG.END_PRESENTATION.TARGET[1], 0);
+    expect(laterStaticState.target[2]).toBeCloseTo(CAMERA_CONFIG.END_PRESENTATION.TARGET[2], 0);
+    expect(distanceBetween(laterStaticState.position, firstStaticState.position)).toBeLessThan(1.5);
   });
 
   it("places goal-line camera on opposite sides for opposite attacking directions", () => {

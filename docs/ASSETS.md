@@ -26,6 +26,14 @@ This project uses third-party 3D assets/textures. Keep this file with the reposi
 - Pack name indicates `Grass001_2K-JPG`.
 - Original upstream source and license should be confirmed and documented before commercial release.
 
+### Start Sting
+
+- File: `public/audio/pitch-pulse-start-sting.mp3`
+- Title: `Intro transition`
+- Source: https://mixkit.co/free-sound-effects/intro/
+- Preview asset used: `https://assets.mixkit.co/active_storage/sfx/1146/1146-preview.mp3`
+- License: Mixkit License (https://mixkit.co/license/)
+
 ## Removed Non-Runtime Files
 
 The repository previously contained large archives and non-web files (including executable payloads) under `public/`. Those were removed from runtime delivery and should stay out of deploy assets.

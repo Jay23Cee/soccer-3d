@@ -363,6 +363,7 @@ export const GOALKEEPER_CONFIG = {
 
 export const CAMERA_CONFIG = {
   MODES: {
+    LANDING_HERO: "landing-hero",
     BROADCAST_WIDE: "broadcast-wide",
     PLAYER_CHASE: "player-chase",
     GOAL_LINE: "goal-line",
@@ -376,6 +377,7 @@ export const CAMERA_CONFIG = {
     GOAL: "goal",
     SAVE: "save",
     REPLAY: "replay",
+    END_ORBIT: "end-orbit",
   },
   BASE_HEIGHT: 64,
   BASE_DISTANCE: 112,
@@ -386,7 +388,25 @@ export const CAMERA_CONFIG = {
     FOV_REDUCTION: 5,
     MIN_FOV: 36,
   },
+  LANDING_HERO: {
+    TARGET: [0, 8, 0],
+    BASE_POSITION: [0, 27, 58],
+    DRIFT_X: 7,
+    DRIFT_Y: 1.2,
+    DRIFT_Z: 5,
+    DRIFT_SPEED: 0.42,
+    DRIFT_DEPTH_SPEED: 0.28,
+  },
+  END_PRESENTATION: {
+    TARGET: [0, 22, 0],
+    CARD_POSITION: [0, 22, 0],
+    ORBIT_RADIUS: 108,
+    ORBIT_HEIGHT: 58,
+    ORBIT_SPEED: 0.16,
+    STATIC_POSITION: [86, 56, 94],
+  },
   FOV: {
+    LANDING_HERO: 38,
     BROADCAST_WIDE: 52,
     PLAYER_CHASE: 48,
     GOAL_LINE: 45,
@@ -400,13 +420,15 @@ export const CAMERA_CONFIG = {
     GOAL: 48,
     SAVE: 47,
     REPLAY: 42,
+    END_ORBIT: 40,
   },
 };
 
 export const REPLAY_CONFIG = {
-  MAX_BUFFER_FRAMES: 240,
-  PRE_EVENT_FRAMES: 90,
-  POST_EVENT_FRAMES: 85,
+  MAX_BUFFER_FRAMES: 180,
+  MAX_ARCHIVED_CLIPS: 6,
+  PRE_EVENT_FRAMES: 60,
+  POST_EVENT_FRAMES: 50,
   FRAME_INTERVAL_MS: 1000 / 30,
   COOLDOWN_MS: 1200,
   STATE: {

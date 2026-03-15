@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
 import SoccerPlayer from "./SoccerPlayer";
 
+function resolveElement(element) {
+  if (typeof element?.type === "function") {
+    return resolveElement(element.type(element.props));
+  }
+
+  return element;
+}
+
 function elementChildren(element) {
-  const children = element?.props?.children;
+  const resolvedElement = resolveElement(element);
+  const children = resolvedElement?.props?.children;
 
   if (!children) {
     return [];
@@ -12,15 +21,17 @@ function elementChildren(element) {
 }
 
 function findElementByName(element, name) {
-  if (!element || typeof element !== "object") {
+  const resolvedElement = resolveElement(element);
+
+  if (!resolvedElement || typeof resolvedElement !== "object") {
     return null;
   }
 
-  if (element.props?.name === name) {
-    return element;
+  if (resolvedElement.props?.name === name) {
+    return resolvedElement;
   }
 
-  for (const child of elementChildren(element)) {
+  for (const child of elementChildren(resolvedElement)) {
     const match = findElementByName(child, name);
     if (match) {
       return match;
@@ -72,9 +83,7 @@ describe("SoccerPlayer", () => {
   it("uses secondary kit colors when kitVariant is secondary", () => {
     const player = SoccerPlayer({ kitVariant: "secondary" });
     const torsoMesh = findElementByName(player, "torso-core");
-    const torsoMaterial = elementChildren(torsoMesh).find(
-      (child) => child?.type === "meshStandardMaterial"
-    );
+    const torsoMaterial = elementChildren(torsoMesh).find((child) => child?.props?.color);
 
     expect(torsoMaterial.props.color).toBe("#facc15");
   });
@@ -83,5 +92,11 @@ describe("SoccerPlayer", () => {
     const player = SoccerPlayer({ isActive: true });
 
     expect(findElementByName(player, "active-marker")).toBeTruthy();
+  });
+
+  it("renders goalkeeper gloves when isGoalkeeper is true", () => {
+    const player = SoccerPlayer({ isGoalkeeper: true });
+
+    expect(findElementByName(player, "keeper-gloves")).toBeTruthy();
   });
 });

@@ -1,12 +1,10 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import {
-  Billboard,
   Environment,
   Html,
   OrbitControls,
   PerspectiveCamera,
-  Text,
 } from "@react-three/drei";
 import { Physics } from "@react-three/cannon";
 import SoccerField from "./SoccerField";
@@ -14,7 +12,12 @@ import SoccerBallModel from "./SoccerBallModel";
 import GoalNet from "./GoalNet";
 import SoccerPlayer from "./SoccerPlayer";
 import CameraDirector from "./camera/CameraDirector";
+import { createStartStingAudio, playStartSting, stopStartSting } from "./audio/startSting";
 import MatchStoryPanel from "./ui/MatchStoryPanel";
+import LandingHero from "./ui/LandingHero";
+import LandingTitleScreen from "./ui/LandingTitleScreen";
+import LandingSetupPanel from "./ui/LandingSetupPanel";
+import ReplayWorldLabel from "./ui/ReplayWorldLabel";
 import useGoalkeeperAI from "./hooks/useGoalkeeperAI";
 import useOutfieldAI from "./hooks/useOutfieldAI";
 import usePowerPlay from "./hooks/usePowerPlay";
@@ -89,6 +92,11 @@ import {
   mapArrowStateToWorldDirection,
   mapSingleArrowKeyToWorldForce,
 } from "./input/movementMapping";
+import {
+  resolveControlledPlayerAnimationState,
+  resolveGoalkeeperAnimationState,
+  resolveOutfieldAnimationState,
+} from "./playerAnimation";
 import "./App.css";
 
 const TEAM_ONE = {
@@ -107,6 +115,15 @@ const CONTROL_TARGETS = {
   PLAYER: "player",
   BALL: "ball",
 };
+const REPLAY_SOURCES = {
+  LIVE: "live",
+  HIGHLIGHTS: "highlights",
+};
+const LANDING_SCREENS = {
+  TITLE: "title",
+  MENU: "menu",
+};
+const APP_TITLE = "Goal Rush";
 
 const PLAYER_BOUNDARY_MARGIN = 2;
 const PLAYER_SPRINT_KEY = "a";
@@ -259,10 +276,10 @@ function createInitialMatchStats() {
 
 function createInitialCameraState() {
   return {
-    mode: CAMERA_CONFIG.MODES.BROADCAST_WIDE,
-    position: [...INTRO_CONFIG.CAMERA_END],
-    target: [0, 0, 0],
-    fov: CAMERA_CONFIG.FOV.BROADCAST_WIDE,
+    mode: CAMERA_CONFIG.MODES.LANDING_HERO,
+    position: [...CAMERA_CONFIG.LANDING_HERO.BASE_POSITION],
+    target: [...CAMERA_CONFIG.LANDING_HERO.TARGET],
+    fov: CAMERA_CONFIG.FOV.LANDING_HERO,
   };
 }
 
@@ -275,6 +292,18 @@ function createInitialReplayState() {
     eventId: null,
     currentPlaybackIndex: 0,
     totalPlaybackFrames: 0,
+    source: null,
+    playlistIndex: 0,
+    playlistLength: 0,
+  };
+}
+
+function createEmptyHighlightPlaylistState() {
+  return {
+    active: false,
+    clipIds: [],
+    currentIndex: -1,
+    playbackStarted: false,
   };
 }
 
@@ -586,6 +615,12 @@ function clockLabel(gameState) {
   }
 }
 
+function TeamFlag({ flagClass, className = "", testId }) {
+  const composedClassName = ["team-flag", flagClass, className].filter(Boolean).join(" ");
+
+  return <span className={composedClassName} aria-hidden="true" data-testid={testId} />;
+}
+
 function BroadcastScoreboard({
   teamOne,
   teamTwo,
@@ -595,6 +630,7 @@ function BroadcastScoreboard({
   gameState,
   matchEvent,
   pulseType,
+  presentationMode = "primary",
 }) {
   const scoreboardClassName = [
     "broadcast-scoreboard",
@@ -605,6 +641,7 @@ function BroadcastScoreboard({
     gameState === GAME_STATES.ENDED || matchEvent?.type === MATCH_EVENT_TYPES.END
       ? "is-end"
       : "",
+    presentationMode === "backup" ? "is-backup" : "",
     matchEvent?.type === MATCH_EVENT_TYPES.BOOST ? "is-boost" : "",
     matchEvent?.type === MATCH_EVENT_TYPES.SAVE ? "is-save" : "",
     pulseType === "kick" ? "is-kick" : "",
@@ -613,9 +650,15 @@ function BroadcastScoreboard({
     .join(" ");
 
   return (
-    <div className={scoreboardClassName} role="status" aria-live="polite">
+    <div
+      className={scoreboardClassName}
+      data-testid="broadcast-scoreboard"
+      data-presentation-mode={presentationMode}
+      role="status"
+      aria-live="polite"
+    >
       <div className="team-panel team-left">
-        <span className={`team-flag ${teamOne.flagClass}`} aria-hidden="true" />
+        <TeamFlag flagClass={teamOne.flagClass} testId="broadcast-team-one-flag" />
         <span className="team-name" title={teamOne.name}>
           {teamOne.shortName}
         </span>
@@ -632,7 +675,7 @@ function BroadcastScoreboard({
       </div>
 
       <div className="team-panel team-right">
-        <span className={`team-flag ${teamTwo.flagClass}`} aria-hidden="true" />
+        <TeamFlag flagClass={teamTwo.flagClass} testId="broadcast-team-two-flag" />
         <span className="team-name" title={teamTwo.name}>
           {teamTwo.shortName}
         </span>
@@ -699,80 +742,93 @@ function IntroSequenceOverlay({ introProgress, teamOneName, teamTwoName }) {
   );
 }
 
-function EndMatchScoreboard3D({ teamOneScore, teamTwoScore, teamOneName, teamTwoName }) {
+function EndMatchPresentation({
+  teamOne,
+  teamTwo,
+  teamOneScore,
+  teamTwoScore,
+  highlightCount,
+  onWatchHighlights,
+}) {
+  const highlightLabel = `${highlightCount} goal highlight${highlightCount === 1 ? "" : "s"} ready`;
+
   return (
-    <Billboard position={[0, 28, 0]} follow>
-      <group>
-        <Text
-          position={[0, 11, 0]}
-          color="#fff7e6"
-          fontSize={4.2}
-          anchorX="center"
-          anchorY="middle"
-          outlineWidth={0.2}
-          outlineColor="#0f172a"
-        >
-          MATCH ENDED
-        </Text>
+    <div className="full-time-presentation" data-testid="full-time-presentation">
+      <div className="full-time-presentation-backdrop" aria-hidden="true" />
 
-        <Text
-          position={[-16, 3.5, 0]}
-          color="#c7d2fe"
-          fontSize={2.5}
-          anchorX="center"
-          anchorY="middle"
-          outlineWidth={0.12}
-          outlineColor="#0f172a"
-        >
-          {teamOneName.toUpperCase()}
-        </Text>
-        <Text
-          position={[16, 3.5, 0]}
-          color="#fde68a"
-          fontSize={2.5}
-          anchorX="center"
-          anchorY="middle"
-          outlineWidth={0.12}
-          outlineColor="#0f172a"
-        >
-          {teamTwoName.toUpperCase()}
-        </Text>
+      <section
+        className="full-time-card"
+        data-testid="full-time-end-card"
+        data-layout="screen-modal"
+        aria-label="Full Time"
+      >
+        <div className="full-time-card-header">
+          <p className="full-time-card-kicker">Full Time</p>
+          <p className="full-time-card-caption">Final score</p>
+        </div>
 
-        <Text
-          position={[-16, -3.5, 0]}
-          color="#ffffff"
-          fontSize={7}
-          anchorX="center"
-          anchorY="middle"
-          outlineWidth={0.24}
-          outlineColor="#0f172a"
-        >
-          {teamOneScore}
-        </Text>
-        <Text
-          position={[0, -3.5, 0]}
-          color="#f1f5f9"
-          fontSize={6}
-          anchorX="center"
-          anchorY="middle"
-          outlineWidth={0.2}
-          outlineColor="#0f172a"
-        >
-          -
-        </Text>
-        <Text
-          position={[16, -3.5, 0]}
-          color="#ffffff"
-          fontSize={7}
-          anchorX="center"
-          anchorY="middle"
-          outlineWidth={0.24}
-          outlineColor="#0f172a"
-        >
-          {teamTwoScore}
-        </Text>
-      </group>
-    </Billboard>
+        <h2 className="full-time-card-title" data-testid="full-time-card-title">
+          Match Ended
+        </h2>
+
+        <div className="full-time-card-scoreline">
+          <div className="full-time-card-team" data-testid="full-time-team-one">
+            <div className="full-time-card-team-header">
+              <TeamFlag
+                flagClass={teamOne.flagClass}
+                className="team-flag-large"
+                testId="full-time-team-one-flag"
+              />
+              <div className="full-time-card-team-labels">
+                <span className="full-time-card-team-name">{teamOne.name}</span>
+                <span className="full-time-card-team-short">{teamOne.shortName}</span>
+              </div>
+            </div>
+            <strong className="full-time-card-score" data-testid="full-time-team-one-score">
+              {teamOneScore}
+            </strong>
+          </div>
+
+          <div className="full-time-card-divider" aria-hidden="true">
+            -
+          </div>
+
+          <div className="full-time-card-team" data-testid="full-time-team-two">
+            <div className="full-time-card-team-header">
+              <TeamFlag
+                flagClass={teamTwo.flagClass}
+                className="team-flag-large"
+                testId="full-time-team-two-flag"
+              />
+              <div className="full-time-card-team-labels">
+                <span className="full-time-card-team-name">{teamTwo.name}</span>
+                <span className="full-time-card-team-short">{teamTwo.shortName}</span>
+              </div>
+            </div>
+            <strong className="full-time-card-score" data-testid="full-time-team-two-score">
+              {teamTwoScore}
+            </strong>
+          </div>
+        </div>
+
+        <div className="full-time-card-actions">
+          <p className="full-time-card-copy">
+            {highlightCount > 0 ? highlightLabel : "No archived goal highlights in this match"}
+          </p>
+
+          {highlightCount > 0 ? (
+            <button
+              className="full-time-card-button"
+              data-testid="watch-highlights-button"
+              onClick={onWatchHighlights}
+              type="button"
+            >
+              Watch Highlights
+            </button>
+          ) : null}
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -796,7 +852,9 @@ function App() {
   const [controlTarget, setControlTarget] = useState(CONTROL_TARGETS.PLAYER);
   const [cameraPovMode, setCameraPovMode] = useState(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
   const [movementMappingMode, setMovementMappingMode] = useState(MOVEMENT_MAPPING_MODES.AUTO);
+  const [landingScreen, setLandingScreen] = useState(LANDING_SCREENS.TITLE);
   const [optionsExpanded, setOptionsExpanded] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
   const [playerStates, setPlayerStates] = useState(() =>
     createInitialPlayerStates(INITIAL_TEAM_ATTACK_DIRECTIONS)
   );
@@ -862,7 +920,10 @@ function App() {
   const pendingKickoffRef = useRef(null);
   const kickoffCommandTimeoutRef = useRef(null);
   const keeperPuntSequenceRef = useRef(null);
+  const highlightPlaylistRef = useRef(createEmptyHighlightPlaylistState());
   const lastKickoffRef = useRef(null);
+  const startStingAudioRef = useRef(null);
+  const stopStartStingRef = useRef(() => {});
   const teamAttackMemoryRef = useRef(createInitialTeamAttackMemory());
   const teamAttackDirectionsRef = useRef({
     ...INITIAL_TEAM_ATTACK_DIRECTIONS,
@@ -876,13 +937,36 @@ function App() {
   });
 
   const replayActive = replayState.isPlaying;
-  const freeRoamCameraEnabled = cameraPovMode === CAMERA_CONFIG.MODES.FREE_ROAM;
-  const controlsEnabled = gameState === GAME_STATES.IN_PLAY && !replayActive;
+  const highlightReplayActive =
+    replayState.source === REPLAY_SOURCES.HIGHLIGHTS &&
+    replayState.mode !== REPLAY_CONFIG.STATE.IDLE;
+  const replayPresentationActive = replayState.isPlaying || highlightReplayActive;
+  const fullTimePresentationActive = gameState === GAME_STATES.ENDED;
+  const idleLandingActive = gameState === GAME_STATES.IDLE;
+  const activeCameraMode = replayPresentationActive
+    ? CAMERA_CONFIG.MODES.REPLAY
+    : fullTimePresentationActive
+      ? CAMERA_CONFIG.MODES.END_ORBIT
+      : idleLandingActive
+        ? CAMERA_CONFIG.MODES.LANDING_HERO
+        : cameraPovMode;
+  const freeRoamCameraEnabled = activeCameraMode === CAMERA_CONFIG.MODES.FREE_ROAM;
+  const cameraSelectionLocked = fullTimePresentationActive || replayPresentationActive;
+  const controlsEnabled = gameState === GAME_STATES.IN_PLAY && !replayPresentationActive;
   const ballControlsEnabled = controlsEnabled && controlTarget === CONTROL_TARGETS.BALL;
   const playerControlsEnabled = controlsEnabled && controlTarget === CONTROL_TARGETS.PLAYER;
-  const canScore = gameState === GAME_STATES.IN_PLAY && !replayActive;
+  const canScore = gameState === GAME_STATES.IN_PLAY && !replayPresentationActive;
   const matchStarted = gameState !== GAME_STATES.IDLE;
   const showShotMeter = controlTarget === CONTROL_TARGETS.PLAYER;
+  const archivedReplayClips = replayDirectorRef.current.getArchivedClips();
+  const showFullTimePresentation = fullTimePresentationActive && !highlightReplayActive;
+  const replayLabelPosition = replayFrame?.ball?.position
+    ? [
+        replayFrame.ball.position[0],
+        Math.max(18, replayFrame.ball.position[1] + 20),
+        replayFrame.ball.position[2],
+      ]
+    : [0, 18, 0];
   const aiPacePercent = Math.round(aiPaceMultiplier * 100);
   const shotMeterPercent = Math.round(shotMeterState.chargeRatio * 100);
   const perfectWindowStartPercent = Math.round(SHOT_METER_CONFIG.PERFECT_WINDOW_START * 100);
@@ -942,33 +1026,12 @@ function App() {
     : isSprintHeld && playerControlsEnabled
       ? "ON"
       : "OFF";
-  const playerOneAnimationState = shotMeterState.isCharging
-    ? "shoot"
-    : playerControlsEnabled && !activePlayerState.sprintLocked && isSprintHeld
-      ? "run"
-      : "track";
-  const getOutfieldAnimationState = useCallback((outfieldAiState) => {
-    if (!outfieldAiState) {
-      return "idle";
-    }
-    if (outfieldAiState.mode === OUTFIELD_STATES.SHOOT) {
-      return "shoot";
-    }
-    if (outfieldAiState.mode === OUTFIELD_STATES.PRESS) {
-      return "intercept";
-    }
-    if (
-      outfieldAiState.mode === OUTFIELD_STATES.CARRY ||
-      outfieldAiState.mode === OUTFIELD_STATES.SUPPORT ||
-      outfieldAiState.mode === OUTFIELD_STATES.RECEIVE
-    ) {
-      return "track";
-    }
-    if (outfieldAiState.mode === OUTFIELD_STATES.RECOVER) {
-      return "track";
-    }
-    return "idle";
-  }, []);
+  const playerOneAnimationState = resolveControlledPlayerAnimationState({
+    isCharging: shotMeterState.isCharging,
+    playerControlsEnabled,
+    sprintLocked: activePlayerState.sprintLocked,
+    isSprintHeld,
+  });
   const primaryOpponentSpawnPosition =
     outfieldRoster.find((player) => player.playerId === TEAM_TWO_PLAYER_IDS[0])?.spawnPosition ||
     getPlayerProfile(TEAM_TWO_PLAYER_IDS[0]).spawnPosition;
@@ -985,22 +1048,8 @@ function App() {
       ? getPlayerProfile(possessionState.playerId).label
       : getPlayerProfile(possessionState.playerId).label
     : "Loose Ball";
-  const keeperOneAnimationState =
-    goalkeeperState.teamOne.mode === GOALKEEPER_STATES.DISTRIBUTE
-      ? "distribute"
-      : goalkeeperState.teamOne.mode === GOALKEEPER_STATES.INTERCEPT
-        ? "intercept"
-        : goalkeeperState.teamOne.mode === GOALKEEPER_STATES.SAVE
-          ? "save"
-          : "idle";
-  const keeperTwoAnimationState =
-    goalkeeperState.teamTwo.mode === GOALKEEPER_STATES.DISTRIBUTE
-      ? "distribute"
-      : goalkeeperState.teamTwo.mode === GOALKEEPER_STATES.INTERCEPT
-        ? "intercept"
-        : goalkeeperState.teamTwo.mode === GOALKEEPER_STATES.SAVE
-          ? "save"
-          : "idle";
+  const keeperOneAnimationState = resolveGoalkeeperAnimationState(goalkeeperState.teamOne.mode);
+  const keeperTwoAnimationState = resolveGoalkeeperAnimationState(goalkeeperState.teamTwo.mode);
   const celebrationLevel = gameState === GAME_STATES.GOAL_SCORED ? 0.8 : gameState === GAME_STATES.ENDED ? 1 : 0;
 
   const activeBoostConfig = activeBoost
@@ -1061,8 +1110,10 @@ function App() {
 
   const cameraPosition = useMemo(() => {
     const basePosition =
-      gameState !== GAME_STATES.INTRO
-        ? [...INTRO_CONFIG.CAMERA_END]
+      gameState === GAME_STATES.IDLE
+        ? [...CAMERA_CONFIG.LANDING_HERO.BASE_POSITION]
+        : gameState !== GAME_STATES.INTRO
+          ? [...INTRO_CONFIG.CAMERA_END]
         : [
             lerp(INTRO_CONFIG.CAMERA_START[0], INTRO_CONFIG.CAMERA_END[0], introProgress),
             lerp(INTRO_CONFIG.CAMERA_START[1], INTRO_CONFIG.CAMERA_END[1], introProgress),
@@ -1077,66 +1128,47 @@ function App() {
   }, [cameraNudge, gameState, introProgress]);
 
   const cameraFov =
-    gameState === GAME_STATES.INTRO
+    gameState === GAME_STATES.IDLE
+      ? CAMERA_CONFIG.FOV.LANDING_HERO
+      : gameState === GAME_STATES.INTRO
       ? lerp(INTRO_CONFIG.CAMERA_START_FOV, INTRO_CONFIG.CAMERA_END_FOV, introProgress)
       : INTRO_CONFIG.CAMERA_END_FOV;
   const selectedDifficultyOption =
     DIFFICULTY_OPTIONS.find((option) => option.value === difficulty) || DIFFICULTY_OPTIONS[1];
   const selectedCameraOption =
     CAMERA_POV_OPTIONS.find((option) => option.value === cameraPovMode) || CAMERA_POV_OPTIONS[0];
-  const optionsPanel = optionsExpanded ? (
-    <div className="options-panel" data-testid="options-panel">
+  const selectedControlTargetLabel =
+    controlTarget === CONTROL_TARGETS.PLAYER ? "Player control" : "Ball control";
+  const controlFocusDescription =
+    controlTarget === CONTROL_TARGETS.PLAYER
+      ? "Player movement and shooting"
+      : "Direct ball physics";
+  const soundLabel = soundEnabled ? "Sound on" : "Sound off";
+  const statusLabel = `Status: ${statusText(gameState)}${replayState.isPlaying ? " | Replay" : ""}`;
+  const setupSummaryItems = [
+    {
+      label: "Difficulty",
+      value: selectedDifficultyOption.label,
+    },
+    {
+      label: "Camera",
+      value: selectedCameraOption.label,
+    },
+    {
+      label: "Control",
+      value: selectedControlTargetLabel,
+    },
+    {
+      label: "Audio",
+      value: soundLabel,
+    },
+  ];
+  const advancedOptionsContent = (
+    <>
       <div className="options-panel-header">
         <strong>Advanced Options</strong>
-        <span>Tune physics, pace, and fallback selectors.</span>
+        <span>Tune physics, audio, pace, and fallback selectors.</span>
       </div>
-
-      {matchStarted && (
-        <>
-          <section className="selection-section is-compact">
-            <div className="selection-heading">
-              <strong>Difficulty</strong>
-              <span>{selectedDifficultyOption.detail}</span>
-            </div>
-            <div className="selection-grid selection-grid-three">
-              {DIFFICULTY_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  className={`selection-card${difficulty === option.value ? " is-active" : ""}`}
-                  onClick={() => setDifficulty(option.value)}
-                  type="button"
-                  aria-pressed={difficulty === option.value}
-                >
-                  <span className="selection-card-label">{option.label}</span>
-                  <small>{option.detail}</small>
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="selection-section is-compact">
-            <div className="selection-heading">
-              <strong>Camera POV</strong>
-              <span>{selectedCameraOption.label}</span>
-            </div>
-            <div className="selection-grid selection-grid-camera">
-              {CAMERA_POV_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  className={`selection-card selection-card-compact${
-                    cameraPovMode === option.value ? " is-active" : ""
-                  }`}
-                  onClick={() => setCameraPovMode(option.value)}
-                  type="button"
-                  aria-pressed={cameraPovMode === option.value}
-                >
-                  <span className="selection-card-label">{option.label}</span>
-                </button>
-              ))}
-            </div>
-          </section>
-        </>
-      )}
 
       <label className="slider-wrap">
         <span className="slider-row">
@@ -1170,6 +1202,23 @@ function App() {
         />
       </label>
 
+      <label className="slider-wrap audio-toggle-wrap">
+        <span className="slider-row">
+          <span>Start Sound</span>
+          <strong className="slider-value">{soundEnabled ? "On" : "Off"}</strong>
+        </span>
+        <span className="toggle-copy">Play the kickoff sting when you launch a new match.</span>
+        <span className="sound-toggle">
+          <input
+            type="checkbox"
+            aria-label="Start Sound"
+            checked={soundEnabled}
+            onChange={(event) => setSoundEnabled(event.target.checked)}
+          />
+          <span>{soundEnabled ? "Enabled" : "Muted"}</span>
+        </span>
+      </label>
+
       <label className="slider-wrap camera-pov-wrap">
         <span className="slider-row">
           <span>Difficulty</span>
@@ -1197,6 +1246,7 @@ function App() {
           aria-label="Camera POV"
           value={cameraPovMode}
           onChange={(event) => setCameraPovMode(event.target.value)}
+          disabled={cameraSelectionLocked}
         >
           {CAMERA_POV_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
@@ -1228,6 +1278,60 @@ function App() {
           ))}
         </select>
       </label>
+    </>
+  );
+  const advancedOptionsPanel = (
+    <div className="options-panel" data-testid="options-panel">
+      {advancedOptionsContent}
+    </div>
+  );
+  const optionsPanel = optionsExpanded ? (
+    <div className="options-panel" data-testid="options-panel">
+      <section className="selection-section is-compact">
+        <div className="selection-heading">
+          <strong>Difficulty</strong>
+          <span>{selectedDifficultyOption.detail}</span>
+        </div>
+        <div className="selection-grid selection-grid-three">
+          {DIFFICULTY_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              className={`selection-card${difficulty === option.value ? " is-active" : ""}`}
+              onClick={() => setDifficulty(option.value)}
+              type="button"
+              aria-pressed={difficulty === option.value}
+            >
+              <span className="selection-card-label">{option.label}</span>
+              <small>{option.detail}</small>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="selection-section is-compact">
+        <div className="selection-heading">
+          <strong>Camera POV</strong>
+          <span>{selectedCameraOption.label}</span>
+        </div>
+        <div className="selection-grid selection-grid-camera">
+          {CAMERA_POV_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              className={`selection-card selection-card-compact${
+                cameraPovMode === option.value ? " is-active" : ""
+              }`}
+              onClick={() => setCameraPovMode(option.value)}
+              type="button"
+              aria-pressed={cameraPovMode === option.value}
+              disabled={cameraSelectionLocked}
+            >
+              <span className="selection-card-label">{option.label}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {advancedOptionsContent}
     </div>
   ) : null;
 
@@ -1356,6 +1460,33 @@ function App() {
       boostExpireTimeoutRef.current = null;
     }
   }, []);
+
+  const stopLandingSting = useCallback(() => {
+    stopStartStingRef.current?.();
+    stopStartStingRef.current = () => {};
+
+    if (startStingAudioRef.current) {
+      stopStartSting(startStingAudioRef.current);
+    }
+  }, []);
+
+  const triggerLandingSting = useCallback(() => {
+    if (!soundEnabled) {
+      stopLandingSting();
+      return;
+    }
+
+    if (!startStingAudioRef.current) {
+      startStingAudioRef.current = createStartStingAudio();
+    }
+
+    if (!startStingAudioRef.current) {
+      return;
+    }
+
+    stopStartStingRef.current?.();
+    stopStartStingRef.current = playStartSting(startStingAudioRef.current);
+  }, [soundEnabled, stopLandingSting]);
 
   const clearComboState = useCallback(() => {
     comboExpiresAtRef.current = 0;
@@ -1712,6 +1843,78 @@ function App() {
     }, POWER_PLAY_CONFIG.ZONE_DURATION_MS);
   }, []);
 
+  const returnToLandingHub = useCallback(() => {
+    const initialTeamDirections = createInitialTeamAttackDirections();
+
+    stopLandingSting();
+    clearIntroTimers();
+    clearPowerPlayTimers();
+    clearComboState();
+    clearKickoffSequence();
+    clearCpuAutomationState();
+    if (goalResetTimeoutRef.current) {
+      clearTimeout(goalResetTimeoutRef.current);
+      goalResetTimeoutRef.current = null;
+    }
+
+    pendingGoalReplayResetRef.current = null;
+    goalCooldownUntilRef.current = 0;
+    lastKickoffRef.current = null;
+    highlightPlaylistRef.current = createEmptyHighlightPlaylistState();
+    setTeamOneScore(0);
+    setTeamTwoScore(0);
+    setTimeLeft(MATCH_DURATION_SECONDS);
+    setCurrentHalf(1);
+    setLandingScreen(LANDING_SCREENS.TITLE);
+    setOptionsExpanded(false);
+    applyTeamAttackDirections(initialTeamDirections);
+    setActivePowerZone(null);
+    setActiveBoost(null);
+    setBoostTimeLeftMs(0);
+    setMatchEvent(null);
+    setEventTimeline([]);
+    setShotMeterState(createShotMeterState());
+    setOutfieldAiStates(
+      createInitialOutfieldAiStates(
+        createOutfieldRosterForAttackDirections(OUTFIELD_ROSTER, initialTeamDirections)
+      )
+    );
+    setGoalkeeperState(createInitialGoalkeeperStates(initialTeamDirections));
+    setMatchStats(createInitialMatchStats());
+    const initialCameraState = {
+      ...createInitialCameraState(),
+      mode: CAMERA_CONFIG.MODES.LANDING_HERO,
+    };
+    cameraTelemetryRef.current = initialCameraState;
+    setCameraState(initialCameraState);
+    setReplayState(createInitialReplayState());
+    setReplayFrame(null);
+    setBallSnapshot(null);
+    setBallActionCommand(null);
+    setTackleCommand(null);
+    setPossessionState(null);
+    setPendingRestart(null);
+    setIntroProgress(0);
+    setGameState(GAME_STATES.IDLE);
+    setOverlayPulseType(null);
+    setCameraNudge([0, 0, 0]);
+    halftimeTriggeredRef.current = false;
+    replayDirectorRef.current = createReplayDirector();
+    aiLastUpdateAtRef.current = 0;
+    goalkeeperLastUpdateAtRef.current = 0;
+    lastPossessionTickAtRef.current = nowMs();
+    resetPlayers(initialTeamDirections);
+  }, [
+    applyTeamAttackDirections,
+    clearComboState,
+    clearCpuAutomationState,
+    clearIntroTimers,
+    clearKickoffSequence,
+    clearPowerPlayTimers,
+    resetPlayers,
+    stopLandingSting,
+  ]);
+
   const startMatch = useCallback(() => {
     const initialTeamDirections = createInitialTeamAttackDirections();
     clearIntroTimers();
@@ -1726,12 +1929,15 @@ function App() {
 
     pendingGoalReplayResetRef.current = null;
     goalCooldownUntilRef.current = 0;
+    lastKickoffRef.current = null;
     setTeamOneScore(0);
     setTeamTwoScore(0);
     setTimeLeft(MATCH_DURATION_SECONDS);
     setCurrentHalf(1);
+    setLandingScreen(LANDING_SCREENS.TITLE);
     setOptionsExpanded(false);
     applyTeamAttackDirections(initialTeamDirections);
+    highlightPlaylistRef.current = createEmptyHighlightPlaylistState();
     setActivePowerZone(null);
     setActiveBoost(null);
     setBoostTimeLeftMs(0);
@@ -1795,6 +2001,11 @@ function App() {
     safeResetBall,
     startKickoffRestart,
   ]);
+
+  const handleLandingStartMatch = useCallback(() => {
+    triggerLandingSting();
+    startMatch();
+  }, [startMatch, triggerLandingSting]);
 
   const skipIntro = useCallback(() => {
     if (gameState !== GAME_STATES.INTRO) {
@@ -2065,6 +2276,10 @@ function App() {
   const handleBallSnapshot = useCallback(
     (snapshot) => {
       setBallSnapshot(snapshot);
+      if (gameState === GAME_STATES.ENDED) {
+        return;
+      }
+
       replayDirectorRef.current.pushFrame({
         timestampMs: snapshot.timestampMs,
         ball: snapshot,
@@ -2081,7 +2296,7 @@ function App() {
         cameraTarget: [...cameraTelemetryRef.current.target],
       });
     },
-    [goalkeeperState.teamOne, goalkeeperState.teamTwo, playerStates]
+    [gameState, goalkeeperState.teamOne, goalkeeperState.teamTwo, playerStates]
   );
 
   const handlePossessionChange = useCallback(
@@ -2404,12 +2619,100 @@ function App() {
     comboStreakRef.current = comboStreak;
   }, [comboStreak]);
 
+  useEffect(() => {
+    if (!soundEnabled) {
+      stopLandingSting();
+    }
+  }, [soundEnabled, stopLandingSting]);
+
   useReplayOrchestration({
     replayDirectorRef,
     setReplayState,
     setReplayFrame,
     nowMs,
   });
+
+  const syncReplayDirectorState = useCallback(() => {
+    setReplayState(replayDirectorRef.current.getPublicState());
+    setReplayFrame(replayDirectorRef.current.getCurrentFrame());
+  }, []);
+
+  const stopHighlightPlaylist = useCallback(() => {
+    highlightPlaylistRef.current = createEmptyHighlightPlaylistState();
+    replayDirectorRef.current.stop();
+    syncReplayDirectorState();
+  }, [syncReplayDirectorState]);
+
+  const playHighlightClipAtIndex = useCallback(
+    (clipIndex) => {
+      const clipIds = highlightPlaylistRef.current.clipIds;
+      if (clipIndex < 0 || clipIndex >= clipIds.length) {
+        stopHighlightPlaylist();
+        return false;
+      }
+
+      highlightPlaylistRef.current = {
+        ...highlightPlaylistRef.current,
+        active: true,
+        currentIndex: clipIndex,
+        playbackStarted: false,
+      };
+      replayDirectorRef.current.stop();
+      const started = replayDirectorRef.current.playArchivedClip(clipIds[clipIndex], nowMs(), {
+        playlistIndex: clipIndex,
+        playlistLength: clipIds.length,
+      });
+
+      if (!started) {
+        stopHighlightPlaylist();
+        return false;
+      }
+
+      syncReplayDirectorState();
+      return true;
+    },
+    [nowMs, stopHighlightPlaylist, syncReplayDirectorState]
+  );
+
+  const advanceHighlightPlaylist = useCallback(() => {
+    const nextIndex = highlightPlaylistRef.current.currentIndex + 1;
+    return playHighlightClipAtIndex(nextIndex);
+  }, [playHighlightClipAtIndex]);
+
+  const startHighlightPlaylist = useCallback(() => {
+    const clips = replayDirectorRef.current.getArchivedClips();
+    if (clips.length === 0) {
+      return;
+    }
+
+    highlightPlaylistRef.current = {
+      active: true,
+      clipIds: clips.map((clip) => clip.id),
+      currentIndex: -1,
+      playbackStarted: false,
+    };
+    playHighlightClipAtIndex(0);
+  }, [playHighlightClipAtIndex]);
+
+  const handleSkipReplay = useCallback(() => {
+    if (!replayState.canSkip) {
+      return;
+    }
+
+    if (replayState.source === REPLAY_SOURCES.HIGHLIGHTS) {
+      advanceHighlightPlaylist();
+      return;
+    }
+
+    replayDirectorRef.current.skip(nowMs());
+    syncReplayDirectorState();
+  }, [
+    advanceHighlightPlaylist,
+    nowMs,
+    replayState.canSkip,
+    replayState.source,
+    syncReplayDirectorState,
+  ]);
 
   useEffect(() => {
     if (previousReplayPlayingRef.current === replayState.isPlaying) {
@@ -2455,6 +2758,34 @@ function App() {
     replayState.isPlaying,
     replayState.mode,
     startKickoffRestart,
+  ]);
+
+  useEffect(() => {
+    const highlightPlaylist = highlightPlaylistRef.current;
+    if (!highlightPlaylist.active) {
+      return;
+    }
+
+    if (replayState.source === REPLAY_SOURCES.HIGHLIGHTS && replayState.isPlaying) {
+      highlightPlaylist.playbackStarted = true;
+      return;
+    }
+
+    if (!highlightPlaylist.playbackStarted || replayState.source !== REPLAY_SOURCES.HIGHLIGHTS) {
+      return;
+    }
+
+    if (
+      replayState.mode === REPLAY_CONFIG.STATE.COOLDOWN ||
+      replayState.mode === REPLAY_CONFIG.STATE.IDLE
+    ) {
+      advanceHighlightPlaylist();
+    }
+  }, [
+    advanceHighlightPlaylist,
+    replayState.isPlaying,
+    replayState.mode,
+    replayState.source,
   ]);
 
   const stageE2EScenario = useCallback(
@@ -2711,9 +3042,13 @@ function App() {
           ...goalAssignments,
         },
         gameState,
+        activeCameraMode,
+        cameraSelectionLocked,
         replayState: {
           ...replayState,
         },
+        archivedReplayCount: replayDirectorRef.current.getArchivedClips().length,
+        replayBufferedFrameCount: replayDirectorRef.current.getBufferedFrameCount(),
         score: {
           teamOne: teamOneScore,
           teamTwo: teamTwoScore,
@@ -2798,6 +3133,8 @@ function App() {
     goalAssignments,
     handleGoal,
     handleOutOfBounds,
+    activeCameraMode,
+    cameraSelectionLocked,
     outfieldAiStates,
     pendingRestart,
     playerStates,
@@ -3188,6 +3525,8 @@ function App() {
   useEffect(() => {
     if (gameState === GAME_STATES.ENDED && previousGameStateRef.current !== GAME_STATES.ENDED) {
       const telemetryEvent = emitTelemetryEvent(MATCH_EVENT_TYPES.END);
+      highlightPlaylistRef.current = createEmptyHighlightPlaylistState();
+      replayDirectorRef.current.clearLiveBuffer();
       setMatchEvent({
         type: MATCH_EVENT_TYPES.END,
         id: telemetryEvent.id,
@@ -3252,7 +3591,7 @@ function App() {
 
       if ((event.key === "r" || event.key === "R") && replayState.canSkip) {
         event.preventDefault();
-        replayDirectorRef.current.skip(nowMs());
+        handleSkipReplay();
         return;
       }
 
@@ -3262,7 +3601,8 @@ function App() {
         !editableTarget &&
         !event.metaKey &&
         !event.ctrlKey &&
-        !event.altKey;
+        !event.altKey &&
+        !cameraSelectionLocked;
 
       if (cameraHotkeysEnabled && !event.repeat && (normalizedKey === "q" || normalizedKey === "e")) {
         event.preventDefault();
@@ -3390,9 +3730,11 @@ function App() {
   }, [
     ballSnapshot,
     clearPlayerInput,
+    handleSkipReplay,
     playerControlsEnabled,
     playerStates,
     possessionState?.teamId,
+    cameraSelectionLocked,
     replayState.canSkip,
     teamOneAttackDirection,
     triggerLobClear,
@@ -3433,8 +3775,15 @@ function App() {
       clearIntroTimers();
       clearPowerPlayTimers();
       clearPlayerInput();
+      stopLandingSting();
     };
-  }, [clearIntroTimers, clearKickoffSequence, clearPlayerInput, clearPowerPlayTimers]);
+  }, [
+    clearIntroTimers,
+    clearKickoffSequence,
+    clearPlayerInput,
+    clearPowerPlayTimers,
+    stopLandingSting,
+  ]);
 
   return (
     <div
@@ -3442,139 +3791,75 @@ function App() {
         prefersReducedMotion ? " reduced-motion" : ""
       }`}
     >
-      <BroadcastScoreboard
-        teamOne={TEAM_ONE}
-        teamTwo={TEAM_TWO}
-        teamOneScore={teamOneScore}
-        teamTwoScore={teamTwoScore}
-        timeLeft={timeLeft}
-        gameState={gameState}
-        matchEvent={matchEvent}
-        pulseType={overlayPulseType}
-      />
-      <MatchEventBanner event={matchEvent} />
+      {matchStarted && (
+        <>
+          <BroadcastScoreboard
+            teamOne={TEAM_ONE}
+            teamTwo={TEAM_TWO}
+            teamOneScore={teamOneScore}
+            teamTwoScore={teamTwoScore}
+            timeLeft={timeLeft}
+            gameState={gameState}
+            matchEvent={matchEvent}
+            pulseType={overlayPulseType}
+            presentationMode={fullTimePresentationActive ? "backup" : "primary"}
+          />
+          <MatchEventBanner event={matchEvent} />
+        </>
+      )}
 
-      <div
-        className={`overlay ${matchStarted ? "is-live" : "is-hub"}${
-          overlayPulseType ? ` pulse-${overlayPulseType}` : ""
-        }`}
-      >
-        <div className="overlay-header">
-          <h1>Soccer 3D</h1>
-          <p className="status-label">
-            Status: {statusText(gameState)}
-            {replayState.isPlaying ? " | Replay" : ""}
+      {!matchStarted && (
+        <LandingHero mode={landingScreen}>
+          {landingScreen === LANDING_SCREENS.TITLE ? (
+            <LandingTitleScreen
+              appTitle={APP_TITLE}
+              statusLabel={statusLabel}
+              teamOneName={TEAM_ONE.name}
+              teamTwoName={TEAM_TWO.name}
+              onStartMatch={handleLandingStartMatch}
+              onOpenMenu={() => setLandingScreen(LANDING_SCREENS.MENU)}
+            />
+          ) : (
+            <LandingSetupPanel
+              appTitle={APP_TITLE}
+              statusLabel={statusLabel}
+              teamOneName={TEAM_ONE.name}
+              teamTwoName={TEAM_TWO.name}
+              setupSummaryItems={setupSummaryItems}
+              difficultyOptions={DIFFICULTY_OPTIONS}
+              selectedDifficultyValue={difficulty}
+              selectedDifficultyDetail={selectedDifficultyOption.detail}
+              cameraOptions={CAMERA_POV_OPTIONS}
+              selectedCameraValue={cameraPovMode}
+              selectedCameraLabel={selectedCameraOption.label}
+              cameraSelectionLocked={cameraSelectionLocked}
+              controlTarget={controlTarget}
+              controlTargets={CONTROL_TARGETS}
+              controlFocusDescription={controlFocusDescription}
+              onStartMatch={handleLandingStartMatch}
+              onBackToTitle={() => setLandingScreen(LANDING_SCREENS.TITLE)}
+              onSelectDifficulty={setDifficulty}
+              onSelectCamera={setCameraPovMode}
+              onSelectControlTarget={setControlTarget}
+              optionsPanel={advancedOptionsPanel}
+            />
+          )}
+        </LandingHero>
+      )}
+
+      {matchStarted && (
+        <div className={`overlay is-live${overlayPulseType ? ` pulse-${overlayPulseType}` : ""}`}>
+          <div className="overlay-header">
+            <h1>{APP_TITLE}</h1>
+            <p className="status-label">{statusLabel}</p>
+          </div>
+
+          <p className="fixture-label">
+            <span>{TEAM_ONE.name}</span>
+            <span className="fixture-vs">vs</span>
+            <span>{TEAM_TWO.name}</span>
           </p>
-        </div>
 
-        <p className="fixture-label">
-          <span>{TEAM_ONE.name}</span>
-          <span className="fixture-vs">vs</span>
-          <span>{TEAM_TWO.name}</span>
-        </p>
-
-        {!matchStarted && (
-          <>
-            <section className="hub-intro">
-              <p className="hub-kicker">Arcade-real football</p>
-              <h2 className="hub-title">Pick the feel, camera, and kickoff setup.</h2>
-              <p className="hub-copy">
-                Hard shots now separate from runners, keepers pause before punting, and `C`
-                sends a lofted clear into space.
-              </p>
-              <div className="hub-actions">
-                <button className="btn-primary hub-start-button" onClick={startMatch} type="button">
-                  Start Match
-                </button>
-                <button
-                  className={`btn-ghost options-toggle${optionsExpanded ? " is-active" : ""}`}
-                  onClick={() => setOptionsExpanded((current) => !current)}
-                  type="button"
-                  aria-expanded={optionsExpanded}
-                >
-                  Options
-                </button>
-              </div>
-            </section>
-
-            <section className="selection-section">
-              <div className="selection-heading">
-                <strong>Difficulty</strong>
-                <span>{selectedDifficultyOption.detail}</span>
-              </div>
-              <div className="selection-grid selection-grid-three">
-                {DIFFICULTY_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    className={`selection-card${difficulty === option.value ? " is-active" : ""}`}
-                    onClick={() => setDifficulty(option.value)}
-                    type="button"
-                    aria-pressed={difficulty === option.value}
-                  >
-                    <span className="selection-card-label">{option.label}</span>
-                    <small>{option.detail}</small>
-                  </button>
-                ))}
-              </div>
-            </section>
-
-            <section className="selection-section">
-              <div className="selection-heading">
-                <strong>Camera POV</strong>
-                <span>{selectedCameraOption.label}</span>
-              </div>
-              <div className="selection-grid selection-grid-camera">
-                {CAMERA_POV_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    className={`selection-card selection-card-compact${
-                      cameraPovMode === option.value ? " is-active" : ""
-                    }`}
-                    onClick={() => setCameraPovMode(option.value)}
-                    type="button"
-                    aria-pressed={cameraPovMode === option.value}
-                  >
-                    <span className="selection-card-label">{option.label}</span>
-                  </button>
-                ))}
-              </div>
-            </section>
-
-            <section className="selection-section">
-              <div className="selection-heading">
-                <strong>Control Focus</strong>
-                <span>
-                  {controlTarget === CONTROL_TARGETS.PLAYER
-                    ? "Player movement and shooting"
-                    : "Direct ball physics"}
-                </span>
-              </div>
-              <div className="controls controls-compact">
-                <button
-                  className={controlTarget === CONTROL_TARGETS.PLAYER ? "btn-primary" : "btn-ghost"}
-                  onClick={() => setControlTarget(CONTROL_TARGETS.PLAYER)}
-                  type="button"
-                  aria-pressed={controlTarget === CONTROL_TARGETS.PLAYER}
-                >
-                  Control Player
-                </button>
-
-                <button
-                  className={controlTarget === CONTROL_TARGETS.BALL ? "btn-primary" : "btn-ghost"}
-                  onClick={() => setControlTarget(CONTROL_TARGETS.BALL)}
-                  type="button"
-                  aria-pressed={controlTarget === CONTROL_TARGETS.BALL}
-                >
-                  Control Ball
-                </button>
-              </div>
-            </section>
-
-            {optionsPanel}
-          </>
-        )}
-
-        {matchStarted && (
           <div className="controls controls-compact">
             <button
               className={controlTarget === CONTROL_TARGETS.PLAYER ? "btn-primary" : "btn-ghost"}
@@ -3603,6 +3888,17 @@ function App() {
               Options
             </button>
 
+            {replayState.canSkip && (
+              <button
+                className="btn-primary"
+                data-testid="skip-replay-button"
+                onClick={handleSkipReplay}
+                type="button"
+              >
+                Skip Replay (R)
+              </button>
+            )}
+
             {gameState === GAME_STATES.INTRO && (
               <button className="btn-ghost" onClick={skipIntro} type="button">
                 Skip Intro
@@ -3624,117 +3920,131 @@ function App() {
               Reset Ball
             </button>
 
-            <button className="btn-danger" onClick={startMatch} type="button">
+            <button className="btn-danger" onClick={returnToLandingHub} type="button">
               Restart Match
             </button>
           </div>
-        )}
 
-        <p className="active-player-chip" data-testid="active-player-label">
-          <span>Active Player:</span>
-          <strong>{activeProfile.label}</strong>
-          <span>{activePlayerStrength}</span>
-          <span className="active-player-speed">{activeMovementSpeed.toFixed(1)} SPD</span>
-        </p>
+          <p className="active-player-chip" data-testid="active-player-label">
+            <span>Active Player:</span>
+            <strong>{activeProfile.label}</strong>
+            <span>{activePlayerStrength}</span>
+            <span className="active-player-speed">{activeMovementSpeed.toFixed(1)} SPD</span>
+          </p>
 
-        <p className="boost-label" data-testid="hud-possession-owner">
-          Possession: {possessionState ? possessionOwnerLabel : "Loose Ball"}
-        </p>
+          <p className="boost-label" data-testid="hud-possession-owner">
+            Possession: {possessionState ? possessionOwnerLabel : "Loose Ball"}
+          </p>
 
-        <p className="combo-label" data-testid="hud-cpu-phase">
-          CPU Phase: {cpuPhaseLabel}
-        </p>
+          <p className="combo-label" data-testid="hud-cpu-phase">
+            CPU Phase: {cpuPhaseLabel}
+          </p>
 
-        <p className={`boost-label ${activeBoost ? "is-active" : ""}`}>
-          Boost:{" "}
-          {activeBoost
-            ? `${activeBoost.label} ${Math.max(1, Math.ceil(boostTimeLeftMs / 1000))}s x${appliedComboMultiplier.toFixed(2)}`
-            : "None"}
-        </p>
+          <p className={`boost-label ${activeBoost ? "is-active" : ""}`}>
+            Boost:{" "}
+            {activeBoost
+              ? `${activeBoost.label} ${Math.max(1, Math.ceil(boostTimeLeftMs / 1000))}s x${appliedComboMultiplier.toFixed(2)}`
+              : "None"}
+          </p>
 
-        <p
-          className={`combo-label ${comboStreak > 0 ? "is-active" : ""}${
-            comboWarning ? " is-warning" : ""
-          }`}
-          data-testid="combo-status"
-        >
-          Combo:{" "}
-          {comboStreak > 0
-            ? `x${comboMultiplier.toFixed(2)} | Streak ${comboStreak} | ${Math.max(
-                0.1,
-                comboTimeLeftMs / 1000
-              ).toFixed(1)}s`
-            : "None"}
-        </p>
-
-        {showShotMeter && (
-          <div
-            className={`shot-meter${playerControlsEnabled ? " is-active" : ""}${
-              shotMeterState.isCharging ? " is-charging" : ""
-            }${shotMeterState.isPerfect ? " is-perfect" : ""}`}
-            data-testid="shot-meter"
+          <p
+            className={`combo-label ${comboStreak > 0 ? "is-active" : ""}${
+              comboWarning ? " is-warning" : ""
+            }`}
+            data-testid="combo-status"
           >
-            <span className="shot-meter-row">
-              <span>Shot Meter</span>
-              <strong data-testid="shot-meter-value">{shotMeterPercent}%</strong>
-            </span>
-            <div className="shot-meter-track" aria-hidden="true">
-              <span className="shot-meter-fill" style={{ width: `${shotMeterPercent}%` }} />
-              <span
-                className="shot-meter-perfect-window"
-                style={{
-                  left: `${perfectWindowStartPercent}%`,
-                  width: `${perfectWindowWidthPercent}%`,
-                }}
-              />
-            </div>
-            <small className="shot-meter-hint">
-              {playerControlsEnabled
-                ? shotMeterState.isCharging
-                  ? shotMeterState.isPerfect
-                    ? "Perfect window"
-                    : "Charging shot"
-                  : "Hold D, release to shoot"
-                : "Shot meter activates during live player control"}
-            </small>
-          </div>
-        )}
+            Combo:{" "}
+            {comboStreak > 0
+              ? `x${comboMultiplier.toFixed(2)} | Streak ${comboStreak} | ${Math.max(
+                  0.1,
+                  comboTimeLeftMs / 1000
+                ).toFixed(1)}s`
+              : "None"}
+          </p>
 
-        {showShotMeter && (
-          <div className={`stamina-meter ${staminaToneClass}`} data-testid="stamina-meter">
-            <span className="stamina-meter-row">
-              <span>
-                Stamina: <strong data-testid="stamina-value">{activeStaminaPercent}%</strong>
+          {showShotMeter && (
+            <div
+              className={`shot-meter${playerControlsEnabled ? " is-active" : ""}${
+                shotMeterState.isCharging ? " is-charging" : ""
+              }${shotMeterState.isPerfect ? " is-perfect" : ""}`}
+              data-testid="shot-meter"
+            >
+              <span className="shot-meter-row">
+                <span>Shot Meter</span>
+                <strong data-testid="shot-meter-value">{shotMeterPercent}%</strong>
               </span>
-              <span data-testid="sprint-state">Sprint: {sprintStatusLabel}</span>
-            </span>
-            <div className="stamina-meter-track" aria-hidden="true">
-              <span className="stamina-meter-fill" style={{ width: `${activeStaminaPercent}%` }} />
+              <div className="shot-meter-track" aria-hidden="true">
+                <span className="shot-meter-fill" style={{ width: `${shotMeterPercent}%` }} />
+                <span
+                  className="shot-meter-perfect-window"
+                  style={{
+                    left: `${perfectWindowStartPercent}%`,
+                    width: `${perfectWindowWidthPercent}%`,
+                  }}
+                />
+              </div>
+              <small className="shot-meter-hint">
+                {playerControlsEnabled
+                  ? shotMeterState.isCharging
+                    ? shotMeterState.isPerfect
+                      ? "Perfect window"
+                      : "Charging shot"
+                    : "Hold D, release to shoot"
+                  : "Shot meter activates during live player control"}
+              </small>
             </div>
-          </div>
-        )}
+          )}
 
-        {matchStarted && optionsPanel}
+          {showShotMeter && (
+            <div className={`stamina-meter ${staminaToneClass}`} data-testid="stamina-meter">
+              <span className="stamina-meter-row">
+                <span>
+                  Stamina: <strong data-testid="stamina-value">{activeStaminaPercent}%</strong>
+                </span>
+                <span data-testid="sprint-state">Sprint: {sprintStatusLabel}</span>
+              </span>
+              <div className="stamina-meter-track" aria-hidden="true">
+                <span
+                  className="stamina-meter-fill"
+                  style={{ width: `${activeStaminaPercent}%` }}
+                />
+              </div>
+            </div>
+          )}
 
-        <p className="help-text">
-          {controlTarget === CONTROL_TARGETS.PLAYER
-            ? "Controls: Arrow keys move your player. Hold A to sprint. Touch the ball to dribble, hold D to charge, release to kick. Press S to pass to your teammate. Press C to loft a clear into space. Press F to tackle near the ball carrier. Press Tab to switch players when Team One has no possession."
-            : "Controls: Arrow keys move the ball and D pops it upward. Switch to Player mode to run the player."}{" "}
-          Capture power-play zones quickly to build combo multipliers. Press R to skip replay. Camera hotkeys: Q/E
-          cycle POV and 1-8 jumps to camera slots. Movement Mapping lets you force camera-relative or world-relative
-          movement.
-        </p>
+          {optionsPanel}
 
-        <MatchStoryPanel
-          matchStats={matchStats}
-          eventTimeline={eventTimeline}
-          replayState={replayState}
-          aiState={primaryOpponentAiState}
-          difficulty={difficulty}
-          possessionOwnerLabel={possessionOwnerLabel}
-          cpuPhaseLabel={cpuPhaseLabel}
+          <p className="help-text">
+            {controlTarget === CONTROL_TARGETS.PLAYER
+              ? "Controls: Arrow keys move your player. Hold A to sprint. Touch the ball to dribble, hold D to charge, release to kick. Press S to pass to your teammate. Press C to loft a clear into space. Press F to tackle near the ball carrier. Press Tab to switch players when Team One has no possession."
+              : "Controls: Arrow keys move the ball and D pops it upward. Switch to Player mode to run the player."}{" "}
+            Capture power-play zones quickly to build combo multipliers. Press R to skip replay.
+            Camera hotkeys: Q/E cycle POV and 1-8 jumps to camera slots. Movement Mapping lets
+            you force camera-relative or world-relative movement.
+          </p>
+
+          <MatchStoryPanel
+            matchStats={matchStats}
+            eventTimeline={eventTimeline}
+            replayState={replayState}
+            aiState={primaryOpponentAiState}
+            difficulty={difficulty}
+            possessionOwnerLabel={possessionOwnerLabel}
+            cpuPhaseLabel={cpuPhaseLabel}
+          />
+        </div>
+      )}
+
+      {showFullTimePresentation && (
+        <EndMatchPresentation
+          teamOne={TEAM_ONE}
+          teamTwo={TEAM_TWO}
+          teamOneScore={teamOneScore}
+          teamTwoScore={teamTwoScore}
+          highlightCount={archivedReplayClips.length}
+          onWatchHighlights={startHighlightPlaylist}
         />
-      </div>
+      )}
 
       <Canvas
         shadows="percentage"
@@ -3745,7 +4055,7 @@ function App() {
         <PerspectiveCamera ref={cameraRef} makeDefault position={cameraPosition} fov={cameraFov} />
         <CameraDirector
           cameraRef={cameraRef}
-          mode={cameraPovMode}
+          mode={activeCameraMode}
           ballPosition={cameraBallPosition}
           playerPositions={cameraPlayerPositions}
           goalkeeperPositions={cameraKeeperPositions}
@@ -3756,10 +4066,11 @@ function App() {
           introProgress={introProgress}
           gameState={gameState}
           cameraNudge={cameraNudge}
+          prefersReducedMotion={prefersReducedMotion}
           onCameraStateChange={handleCameraStateChange}
         />
-        <fog attach="fog" args={["#04101f", 120, 410]} />
-        <hemisphereLight skyColor="#8ed4ff" groundColor="#1f2c42" intensity={0.62} />
+        <fog attach="fog" args={["#061423", 120, 410]} />
+        <hemisphereLight skyColor="#8fcfff" groundColor="#11283f" intensity={0.62} />
         <directionalLight
           position={[28, 45, 26]}
           intensity={1.2}
@@ -3771,7 +4082,7 @@ function App() {
 
         <OrbitControls
           enablePan
-          enabled={gameState !== GAME_STATES.INTRO && freeRoamCameraEnabled}
+          enabled={gameState !== GAME_STATES.INTRO && freeRoamCameraEnabled && !cameraSelectionLocked}
           maxPolarAngle={Math.PI / 2}
           minPolarAngle={0}
           maxDistance={340}
@@ -3796,8 +4107,8 @@ function App() {
               const animationState = isTeamOnePlayer
                 ? playerId === activePlayerId
                   ? playerOneAnimationState
-                  : getOutfieldAnimationState(outfieldAiState)
-                : getOutfieldAnimationState(outfieldAiState);
+                  : resolveOutfieldAnimationState(outfieldAiState)
+                : resolveOutfieldAnimationState(outfieldAiState);
               const animationBlend = isTeamOnePlayer
                 ? playerId === activePlayerId && playerControlsEnabled && isSprintHeld
                   ? 1
@@ -3920,14 +4231,13 @@ function App() {
             />
           )}
 
-          {gameState === GAME_STATES.ENDED && (
-            <EndMatchScoreboard3D
-              teamOneScore={teamOneScore}
-              teamTwoScore={teamTwoScore}
-              teamOneName={TEAM_ONE.name}
-              teamTwoName={TEAM_TWO.name}
-            />
-          )}
+          <ReplayWorldLabel
+            visible={replayPresentationActive}
+            position={replayLabelPosition}
+            source={replayState.source}
+            playlistIndex={replayState.playlistIndex}
+            playlistLength={replayState.playlistLength}
+          />
         </Suspense>
       </Canvas>
     </div>

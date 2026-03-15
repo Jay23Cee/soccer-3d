@@ -16,6 +16,14 @@ function pushFrames(director, startMs, count) {
   }
 }
 
+function captureGoalClip(director, baseMs, eventId) {
+  pushFrames(director, baseMs, 18);
+  director.armReplay({ type: "goal", id: eventId }, baseMs + 612);
+  pushFrames(director, baseMs + 646, 10);
+  director.update(baseMs + 1_400);
+  director.stop();
+}
+
 describe("ReplayDirector", () => {
   test("arms and enters playing once enough post-event frames exist", () => {
     const director = createReplayDirector({
@@ -110,5 +118,73 @@ describe("ReplayDirector", () => {
     expect(firstFrame.ball.position[2]).not.toBe(999);
     expect(firstFrame.ball.velocity[0]).not.toBe(999);
     expect(firstFrame.players[0].position[0]).not.toBe(999);
+  });
+
+  test("archives goal clips and can replay them as highlights", () => {
+    const director = createReplayDirector({
+      PRE_EVENT_FRAMES: 6,
+      POST_EVENT_FRAMES: 4,
+      MAX_BUFFER_FRAMES: 48,
+      MAX_ARCHIVED_CLIPS: 4,
+      FRAME_INTERVAL_MS: 34,
+      COOLDOWN_MS: 120,
+    });
+
+    captureGoalClip(director, 0, "evt-highlight");
+
+    const archivedClips = director.getArchivedClips();
+    expect(archivedClips).toHaveLength(1);
+    expect(archivedClips[0].eventId).toBe("evt-highlight");
+
+    const started = director.playArchivedClip(archivedClips[0].id, 2_000, {
+      playlistIndex: 0,
+      playlistLength: 1,
+    });
+
+    expect(started).toBe(true);
+    expect(director.getPublicState()).toMatchObject({
+      isPlaying: true,
+      source: "highlights",
+      playlistIndex: 0,
+      playlistLength: 1,
+    });
+    expect(director.getCurrentFrame()).toBeTruthy();
+  });
+
+  test("caps archived clips at the configured limit", () => {
+    const director = createReplayDirector({
+      PRE_EVENT_FRAMES: 4,
+      POST_EVENT_FRAMES: 3,
+      MAX_BUFFER_FRAMES: 64,
+      MAX_ARCHIVED_CLIPS: 2,
+      FRAME_INTERVAL_MS: 34,
+      COOLDOWN_MS: 120,
+    });
+
+    captureGoalClip(director, 0, "evt-1");
+    captureGoalClip(director, 2_000, "evt-2");
+    captureGoalClip(director, 4_000, "evt-3");
+
+    expect(director.getArchivedClips().map((clip) => clip.eventId)).toEqual(["evt-2", "evt-3"]);
+  });
+
+  test("clears the rolling live buffer without dropping archived clips", () => {
+    const director = createReplayDirector({
+      PRE_EVENT_FRAMES: 4,
+      POST_EVENT_FRAMES: 3,
+      MAX_BUFFER_FRAMES: 64,
+      MAX_ARCHIVED_CLIPS: 2,
+      FRAME_INTERVAL_MS: 34,
+      COOLDOWN_MS: 120,
+    });
+
+    captureGoalClip(director, 0, "evt-buffer");
+    pushFrames(director, 2_000, 6);
+    expect(director.getBufferedFrameCount()).toBeGreaterThan(0);
+
+    director.clearLiveBuffer();
+
+    expect(director.getBufferedFrameCount()).toBe(0);
+    expect(director.getArchivedClips()).toHaveLength(1);
   });
 });

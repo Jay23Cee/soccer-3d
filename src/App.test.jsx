@@ -1,5 +1,5 @@
 import React from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { vi } from "vitest";
 import {
   BALL_RESET_DELAY_MS,
@@ -30,13 +30,17 @@ vi.mock("@react-three/fiber", () => ({
   Canvas: ({ children }) => <div data-testid="canvas">{stripUnsupportedCanvasNodes(children)}</div>,
 }));
 
+let latestOrbitControlsProps = null;
 vi.mock("@react-three/drei", () => ({
-  OrbitControls: () => null,
+  OrbitControls: (props) => {
+    latestOrbitControlsProps = props;
+    return <div data-testid="orbit-controls" data-enabled={props.enabled ? "true" : "false"} />;
+  },
   PerspectiveCamera: () => null,
   Environment: () => null,
   Html: ({ children }) => <div>{children}</div>,
   Billboard: ({ children }) => <div>{children}</div>,
-  Text: ({ children }) => <span>{children}</span>,
+  Text: ({ children, ...props }) => <div data-testid={props["data-testid"] || undefined}>{children}</div>,
 }));
 
 vi.mock(
@@ -47,7 +51,13 @@ vi.mock(
   { virtual: true }
 );
 
-vi.mock("./camera/CameraDirector", () => ({ default: () => null }));
+let latestCameraDirectorProps = null;
+vi.mock("./camera/CameraDirector", () => ({
+  default: (props) => {
+    latestCameraDirectorProps = props;
+    return null;
+  },
+}));
 vi.mock("./SoccerField", () => ({ default: () => <div data-testid="soccer-field" /> }));
 let latestOutfieldAiProps = null;
 vi.mock("./hooks/useOutfieldAI", () => ({
@@ -398,6 +408,8 @@ vi.mock("./GoalNet", () => ({
 }));
 
 let App;
+let mockAudioInstances = [];
+let originalAudio = null;
 
 beforeAll(async () => {
   ({ default: App } = await import("./App"));
@@ -405,6 +417,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   mockSnapshotTime = 0;
+  latestCameraDirectorProps = null;
+  latestOrbitControlsProps = null;
   latestOutfieldAiProps = null;
   replayStateOverride = null;
   replayFrameOverride = null;
@@ -412,11 +426,31 @@ beforeEach(() => {
   autoResolveKickoffCommands = true;
   delete window.__SOCCER_E2E__;
   delete window.__SOCCER_TEST_API__;
+  delete window.matchMedia;
+  mockAudioInstances = [];
+  originalAudio = globalThis.Audio;
+  globalThis.Audio = vi.fn().mockImplementation(function MockAudio(src) {
+    this.src = src;
+    this.preload = "";
+    this.volume = 1;
+    this.currentTime = 0;
+    this.play = vi.fn(() => Promise.resolve());
+    this.pause = vi.fn();
+    mockAudioInstances.push(this);
+  });
+});
+
+afterEach(() => {
+  globalThis.Audio = originalAudio;
 });
 
 function startAndSkipIntro() {
-  fireEvent.click(screen.getByRole("button", { name: "Start Match" }));
+  fireEvent.click(screen.getByRole("button", { name: "Press Start" }));
   fireEvent.click(screen.getByRole("button", { name: "Skip Intro" }));
+}
+
+function openMatchSetup() {
+  fireEvent.click(screen.getByRole("button", { name: "Match Setup" }));
 }
 
 function syncReplayDirector(nowMs) {
@@ -478,28 +512,82 @@ function primeCpuAutomationState() {
 }
 
 describe("App", () => {
-  test("renders idle state with match story HUD", () => {
+  test("renders the Goal Rush title screen by default", () => {
     render(<App />);
 
-    expect(screen.getByText("Soccer 3D")).toBeInTheDocument();
-    expect(screen.getByText("Status: Idle")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Start Match" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Options" })).toHaveAttribute("aria-expanded", "false");
-    expect(screen.getByText("Match Story")).toBeInTheDocument();
-    expect(screen.getByTestId("replay-state")).toHaveTextContent("idle");
+    const landingHero = screen.getByTestId("landing-hero");
+
+    expect(within(landingHero).getByRole("heading", { name: /Goal Rush/i })).toBeInTheDocument();
+    expect(within(landingHero).getByText("Status: Idle")).toBeInTheDocument();
+    expect(within(landingHero).getByRole("button", { name: "Press Start" })).toBeInTheDocument();
+    expect(within(landingHero).getByRole("button", { name: "Match Setup" })).toBeInTheDocument();
+    expect(screen.queryByTestId("broadcast-scoreboard")).not.toBeInTheDocument();
+    expect(document.querySelector(".overlay")).not.toBeInTheDocument();
+    expect(screen.queryByText("Match Story")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("replay-state")).not.toBeInTheDocument();
     expect(screen.getAllByTestId("soccer-player")).toHaveLength(4);
     expect(screen.getAllByTestId("soccer-keeper")).toHaveLength(2);
+    expect(latestCameraDirectorProps.mode).toBe(CAMERA_CONFIG.MODES.LANDING_HERO);
+  });
+
+  test("opens the dedicated landing setup menu with persistent back and start actions", () => {
+    render(<App />);
+    openMatchSetup();
+
+    const landingHero = screen.getByTestId("landing-hero");
+
+    expect(within(landingHero).getByText("Match Setup")).toBeInTheDocument();
+    expect(within(landingHero).getByTestId("landing-menu-body")).toBeInTheDocument();
+    expect(within(landingHero).getByRole("button", { name: "Back to Title" })).toBeInTheDocument();
+    expect(within(landingHero).getByRole("button", { name: "Start Match" })).toBeInTheDocument();
+    expect(within(landingHero).getByLabelText("AI Pace")).toHaveValue("0.85");
+    expect(within(landingHero).getByLabelText("Camera POV")).toHaveValue(
+      CAMERA_CONFIG.MODES.BROADCAST_WIDE
+    );
+    expect(document.querySelector(".overlay")).not.toBeInTheDocument();
+  });
+
+  test("returns from the setup menu back to the Goal Rush title screen without starting", () => {
+    render(<App />);
+    openMatchSetup();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to Title" }));
+
+    const landingHero = screen.getByTestId("landing-hero");
+    expect(within(landingHero).getByRole("button", { name: "Press Start" })).toBeInTheDocument();
+    expect(within(landingHero).getByRole("button", { name: "Match Setup" })).toBeInTheDocument();
+    expect(screen.queryByTestId("landing-menu-body")).not.toBeInTheDocument();
+    expect(screen.getByText("Status: Idle")).toBeInTheDocument();
+  });
+
+  test("plays the landing sting only on explicit match start", () => {
+    render(<App />);
+
+    expect(mockAudioInstances).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Press Start" }));
+    expect(mockAudioInstances).toHaveLength(1);
+    expect(mockAudioInstances[0].play).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps the landing sting muted when start sound is disabled", () => {
+    render(<App />);
+
+    openMatchSetup();
+    fireEvent.click(screen.getByLabelText("Start Sound"));
+    fireEvent.click(screen.getByRole("button", { name: "Start Match" }));
+    expect(mockAudioInstances).toHaveLength(0);
   });
 
   test("allows switching between player and ball control targets", () => {
     render(<App />);
+    openMatchSetup();
 
     const playerControlButton = screen.getByRole("button", { name: "Control Player" });
     const ballControlButton = screen.getByRole("button", { name: "Control Ball" });
 
     expect(playerControlButton).toHaveAttribute("aria-pressed", "true");
     expect(ballControlButton).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByTestId("shot-meter")).toBeInTheDocument();
+    expect(screen.queryByTestId("shot-meter")).not.toBeInTheDocument();
 
     fireEvent.click(ballControlButton);
 
@@ -510,6 +598,7 @@ describe("App", () => {
 
   test("shows six soccer camera POV options in the menu", () => {
     render(<App />);
+    openMatchSetup();
 
     const freeRoamButton = screen.getByRole("button", { name: "Free Roam" });
     expect(screen.getByRole("button", { name: "Broadcast Wide" })).toHaveAttribute(
@@ -525,30 +614,29 @@ describe("App", () => {
   test("shows movement mapping select with Auto default", () => {
     render(<App />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    openMatchSetup();
     const mappingSelect = screen.getByLabelText("Movement Mapping");
     expect(mappingSelect).toHaveValue("auto");
   });
 
   test("uses clickable difficulty cards and keeps readability labels", () => {
     render(<App />);
+    openMatchSetup();
 
     expect(screen.getByRole("button", { name: /^Normal/i })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: /^Hard/i }));
     expect(screen.getByRole("button", { name: /^Hard/i })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("AI: hard")).toBeInTheDocument();
-    expect(screen.getByTestId("hud-possession-owner")).toHaveTextContent("Loose Ball");
-    expect(screen.getByTestId("hud-cpu-phase")).toHaveTextContent("recover");
+    expect(screen.getByLabelText("Difficulty")).toHaveValue("hard");
   });
 
-  test("shows advanced options behind the options toggle", () => {
+  test("shows advanced options when the match setup panel opens", () => {
     render(<App />);
 
     expect(screen.queryByLabelText("AI Pace")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    openMatchSetup();
     expect(screen.getByLabelText("AI Pace")).toHaveValue("0.85");
     expect(screen.getByText("85%")).toBeInTheDocument();
-    expect(screen.getByText(/Press F to tackle near the ball carrier/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("Start Sound")).toBeChecked();
   });
 
   test("queues and clears a tackle command with the F hotkey", () => {
@@ -594,7 +682,7 @@ describe("App", () => {
   test("supports camera hotkeys for cycle and direct slot jump", () => {
     render(<App />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    openMatchSetup();
     const povSelect = screen.getByLabelText("Camera POV");
     expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
 
@@ -611,7 +699,7 @@ describe("App", () => {
     expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.FREE_ROAM);
   });
 
-  test("keeps Camera POV select enabled while replay is playing", async () => {
+  test("disables Camera POV select while replay is playing", async () => {
     replayStateOverride = {
       mode: "playing",
       isPlaying: true,
@@ -628,12 +716,16 @@ describe("App", () => {
       expect(screen.getByText(/Status: Idle \| Replay/i)).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    openMatchSetup();
     const povSelect = screen.getByLabelText("Camera POV");
-    expect(povSelect).toBeEnabled();
+    await waitFor(() => {
+      expect(povSelect).toBeDisabled();
+      expect(latestCameraDirectorProps?.mode).toBe(CAMERA_CONFIG.MODES.REPLAY);
+    });
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
   });
 
-  test("supports camera hotkeys while replay is playing", async () => {
+  test("ignores camera hotkeys while replay is playing", async () => {
     replayStateOverride = {
       mode: "playing",
       isPlaying: true,
@@ -650,21 +742,26 @@ describe("App", () => {
       expect(screen.getByText(/Status: Idle \| Replay/i)).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    openMatchSetup();
     const povSelect = screen.getByLabelText("Camera POV");
+    await waitFor(() => {
+      expect(povSelect).toBeDisabled();
+      expect(latestCameraDirectorProps?.mode).toBe(CAMERA_CONFIG.MODES.REPLAY);
+    });
     expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
 
     fireEvent.keyDown(window, { key: "e" });
-    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.PLAYER_CHASE);
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
 
     fireEvent.keyDown(window, { key: "4" });
-    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.ATTACKING_THIRD);
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.BROADCAST_WIDE);
+    expect(latestCameraDirectorProps?.mode).toBe(CAMERA_CONFIG.MODES.REPLAY);
   });
 
   test("starts match into intro and can skip to in-play controls", () => {
     render(<App />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Start Match" }));
+    fireEvent.click(screen.getByRole("button", { name: "Press Start" }));
 
     expect(screen.getByText("Status: Pre-match Intro")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Skip Intro" })).toBeInTheDocument();
@@ -713,9 +810,44 @@ describe("App", () => {
     fireEvent.click(screen.getByTestId("goal-teamOne"));
     fireEvent.click(screen.getByRole("button", { name: "Restart Match" }));
 
-    expect(screen.getByTestId("score-team-one")).toHaveTextContent("0");
-    expect(screen.getByText("Status: Pre-match Intro")).toBeInTheDocument();
-    expect(screen.getByTestId("replay-state")).toHaveTextContent("idle");
+    expect(screen.queryByTestId("score-team-one")).not.toBeInTheDocument();
+    expect(screen.getByText("Status: Idle")).toBeInTheDocument();
+    expect(screen.getByTestId("landing-hero")).toBeInTheDocument();
+    expect(screen.queryByTestId("broadcast-scoreboard")).not.toBeInTheDocument();
+    expect(document.querySelector(".overlay")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("replay-state")).not.toBeInTheDocument();
+  });
+
+  test("forces replay camera mode and restores the saved POV after replay ends", async () => {
+    render(<App />);
+    startAndSkipIntro();
+
+    fireEvent.click(screen.getByRole("button", { name: "Options" }));
+    const povSelect = screen.getByLabelText("Camera POV");
+    fireEvent.change(povSelect, { target: { value: CAMERA_CONFIG.MODES.FREE_ROAM } });
+
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.FREE_ROAM);
+    expect(latestCameraDirectorProps?.mode).toBe(CAMERA_CONFIG.MODES.FREE_ROAM);
+
+    seedReplayBuffer();
+    fireEvent.click(screen.getByTestId("goal-teamOne"));
+    syncReplayDirector(12_000);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Status: Goal Scored \| Replay/i)).toBeInTheDocument();
+      expect(povSelect).toBeDisabled();
+      expect(latestCameraDirectorProps?.mode).toBe(CAMERA_CONFIG.MODES.REPLAY);
+    });
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.FREE_ROAM);
+
+    syncReplayDirector(13_000);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Status: (Kickoff|In Play)/i)).toBeInTheDocument();
+      expect(povSelect).toBeEnabled();
+      expect(latestCameraDirectorProps?.mode).toBe(CAMERA_CONFIG.MODES.FREE_ROAM);
+    });
+    expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.FREE_ROAM);
   });
 
   test("restart clears pending team two cpu commands and attack memory", () => {
@@ -727,7 +859,8 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Restart Match" }));
 
-    expect(screen.getByTestId("ball-action-command")).toHaveTextContent("");
+    expect(screen.queryByTestId("ball-action-command")).not.toBeInTheDocument();
+    expect(screen.getByText("Status: Idle")).toBeInTheDocument();
     expect(latestOutfieldAiProps.teamAttackMemoryRef.current.teamTwo).toMatchObject({
       possessionStartMs: null,
       ballZone: "midfield",
@@ -1011,6 +1144,142 @@ describe("App", () => {
     expect(screen.getByTestId("event-ticker")).toHaveTextContent("Argentina goal");
   });
 
+  test("full time shows the end card, keeps the backup scoreboard visible, and locks camera controls", () => {
+    vi.useFakeTimers();
+
+    try {
+      window.__SOCCER_E2E__ = true;
+      render(<App />);
+      startAndSkipIntro();
+      expect(window.__SOCCER_TEST_API__).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Options" }));
+      const povSelect = screen.getByLabelText("Camera POV");
+      fireEvent.change(povSelect, { target: { value: CAMERA_CONFIG.MODES.FREE_ROAM } });
+
+      act(() => {
+        window.__SOCCER_TEST_API__.setTimeLeft(1);
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(screen.getByText("Status: Match Ended")).toBeInTheDocument();
+      const fullTimePresentation = screen.getByTestId("full-time-presentation");
+      const fullTimeCard = screen.getByTestId("full-time-end-card");
+      expect(fullTimePresentation).toBeInTheDocument();
+      expect(fullTimeCard).toBeInTheDocument();
+      expect(fullTimeCard).toHaveAttribute("data-layout", "screen-modal");
+      expect(screen.getByTestId("canvas")).not.toContainElement(fullTimeCard);
+      expect(screen.getByTestId("full-time-team-one-score")).toHaveTextContent("0");
+      expect(screen.getByTestId("full-time-team-two-score")).toHaveTextContent("0");
+      expect(screen.getByTestId("full-time-team-one-flag")).toBeInTheDocument();
+      expect(screen.getByTestId("full-time-team-two-flag")).toBeInTheDocument();
+      expect(screen.queryByTestId("watch-highlights-button")).not.toBeInTheDocument();
+      expect(screen.getByTestId("broadcast-scoreboard")).toHaveAttribute(
+        "data-presentation-mode",
+        "backup"
+      );
+      expect(screen.getByTestId("broadcast-team-one-flag")).toBeInTheDocument();
+      expect(screen.getByTestId("broadcast-team-two-flag")).toBeInTheDocument();
+      expect(povSelect).toBeDisabled();
+      fireEvent.keyDown(window, { key: "q" });
+      expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.FREE_ROAM);
+      expect(latestCameraDirectorProps.mode).toBe(CAMERA_CONFIG.MODES.END_ORBIT);
+      expect(latestOrbitControlsProps.enabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("full time can launch archived goal highlights and returns to the end card after playback", async () => {
+    vi.useFakeTimers();
+
+    try {
+      window.__SOCCER_E2E__ = true;
+      render(<App />);
+      startAndSkipIntro();
+      seedReplayBuffer();
+
+      fireEvent.click(screen.getByTestId("goal-teamOne"));
+      syncReplayDirector(12_000);
+      expect(screen.getByTestId("replay-world-label")).toHaveTextContent("REPLAY");
+
+      fireEvent.keyDown(window, { key: "r" });
+      syncReplayDirector(12_001);
+
+      act(() => {
+        vi.advanceTimersByTime(KICKOFF_CONFIG.POST_GOAL_DELAY_MS);
+      });
+
+      act(() => {
+        window.__SOCCER_TEST_API__.setTimeLeft(1);
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(screen.getByTestId("watch-highlights-button")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("watch-highlights-button"));
+
+      expect(screen.queryByTestId("full-time-end-card")).not.toBeInTheDocument();
+      expect(screen.getByTestId("replay-world-label")).toHaveTextContent("REPLAY");
+      expect(screen.getByText("Goal 1 / 1")).toBeInTheDocument();
+
+      syncReplayDirector(30_000);
+
+      expect(screen.getByTestId("full-time-end-card")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("preserves the selected live POV through full time and restores it after restart", () => {
+    vi.useFakeTimers();
+
+    try {
+      window.__SOCCER_E2E__ = true;
+      render(<App />);
+      startAndSkipIntro();
+      expect(window.__SOCCER_TEST_API__).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Options" }));
+      const povSelect = screen.getByLabelText("Camera POV");
+      fireEvent.change(povSelect, { target: { value: CAMERA_CONFIG.MODES.FREE_ROAM } });
+      expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.FREE_ROAM);
+
+      act(() => {
+        window.__SOCCER_TEST_API__.setTimeLeft(1);
+        vi.advanceTimersByTime(1000);
+      });
+
+      expect(povSelect).toHaveValue(CAMERA_CONFIG.MODES.FREE_ROAM);
+      expect(povSelect).toBeDisabled();
+      expect(latestCameraDirectorProps.mode).toBe(CAMERA_CONFIG.MODES.END_ORBIT);
+
+      fireEvent.click(screen.getByRole("button", { name: "Restart Match" }));
+      expect(screen.getByText("Status: Idle")).toBeInTheDocument();
+      expect(screen.getByTestId("landing-hero")).toBeInTheDocument();
+      expect(latestCameraDirectorProps.mode).toBe(CAMERA_CONFIG.MODES.LANDING_HERO);
+
+      openMatchSetup();
+      const restartPovSelect = screen.getByLabelText("Camera POV");
+      expect(restartPovSelect).toHaveValue(CAMERA_CONFIG.MODES.FREE_ROAM);
+      expect(restartPovSelect).toBeEnabled();
+      expect(latestCameraDirectorProps.mode).toBe(CAMERA_CONFIG.MODES.LANDING_HERO);
+
+      fireEvent.click(screen.getByRole("button", { name: "Start Match" }));
+      expect(screen.getByText("Status: Pre-match Intro")).toBeInTheDocument();
+      expect(latestCameraDirectorProps.mode).toBe(CAMERA_CONFIG.MODES.FREE_ROAM);
+
+      fireEvent.click(screen.getByRole("button", { name: "Skip Intro" }));
+      expect(screen.getByText("Status: In Play")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Options" }));
+      expect(screen.getByLabelText("Camera POV")).toBeEnabled();
+      expect(latestCameraDirectorProps.mode).toBe(CAMERA_CONFIG.MODES.FREE_ROAM);
+      expect(latestOrbitControlsProps.enabled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("waits for goal replay to finish before resetting the field", () => {
     vi.useFakeTimers();
 
@@ -1138,9 +1407,9 @@ describe("App", () => {
       fireEvent.click(screen.getByTestId("goal-teamOne"));
       syncReplayDirector(12_000);
       expect(screen.getByText(/Status: Goal Scored \| Replay/i)).toBeInTheDocument();
+      expect(screen.getByTestId("skip-replay-button")).toHaveTextContent("Skip Replay (R)");
 
-      fireEvent.keyDown(window, { key: "r" });
-      syncReplayDirector(12_001);
+      fireEvent.click(screen.getByTestId("skip-replay-button"));
 
       expect(screen.getByText("Status: Kickoff")).toBeInTheDocument();
 

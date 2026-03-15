@@ -9,7 +9,6 @@ const GRASS_TEXTURES = [
   "/Grass001_2K-JPG/Grass001_2K-JPG_Color.jpg",
   "/Grass001_2K-JPG/Grass001_2K-JPG_Roughness.jpg",
   "/Grass001_2K-JPG/Grass001_2K-JPG_NormalGL.jpg",
-  "/Grass001_2K-JPG/Grass001_2K-JPG_Displacement.jpg",
 ];
 
 const TRACK_CONFIG = {
@@ -35,8 +34,7 @@ function BoundaryWall({ position, args }) {
 }
 
 function SoccerField({ activePowerZone }) {
-  const [grassColor, grassRoughness, grassNormal, grassDisplacement] =
-    useTexture(GRASS_TEXTURES);
+  const [grassColor, grassRoughness, grassNormal] = useTexture(GRASS_TEXTURES);
   const { WIDTH, LENGTH, MARKING_OFFSET_Y, BOUNDARY } = FIELD_CONFIG;
   const powerZoneRef = useRef(null);
   const powerZoneMaterialRef = useRef(null);
@@ -91,7 +89,7 @@ function SoccerField({ activePowerZone }) {
 
   grassColor.colorSpace = THREE.SRGBColorSpace;
 
-  [grassColor, grassRoughness, grassNormal, grassDisplacement].forEach((map) => {
+  [grassColor, grassRoughness, grassNormal].forEach((map) => {
     map.wrapS = THREE.RepeatWrapping;
     map.wrapT = THREE.RepeatWrapping;
     map.repeat.set(50, 25);
@@ -127,13 +125,11 @@ function SoccerField({ activePowerZone }) {
       </mesh>
 
       <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
-        <planeGeometry args={[WIDTH, LENGTH, 64, 64]} />
+        <planeGeometry args={[WIDTH, LENGTH]} />
         <meshStandardMaterial
           map={grassColor}
           roughnessMap={grassRoughness}
           normalMap={grassNormal}
-          displacementMap={grassDisplacement}
-          displacementScale={0.08}
           roughness={0.8}
           emissive="#06222c"
           emissiveIntensity={0.22}

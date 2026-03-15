@@ -15,6 +15,8 @@ type MatchSnapshot = {
     positiveZ: TeamGoalId;
   };
   gameState: string;
+  activeCameraMode: string;
+  cameraSelectionLocked: boolean;
   replayState: {
     mode: string;
     isPlaying: boolean;
@@ -23,7 +25,12 @@ type MatchSnapshot = {
     eventId: string | null;
     currentPlaybackIndex: number;
     totalPlaybackFrames: number;
+    source: "live" | "highlights" | null;
+    playlistIndex: number;
+    playlistLength: number;
   };
+  archivedReplayCount: number;
+  replayBufferedFrameCount: number;
   score: {
     teamOne: number;
     teamTwo: number;
@@ -192,7 +199,7 @@ async function triggerOutOfBounds(
 }
 
 async function startMatchAndSkipIntro(page) {
-  await page.getByRole("button", { name: "Start Match" }).click();
+  await clickLandingStartMatch(page);
   await expect(page.getByText("Status: Pre-match Intro")).toBeVisible({ timeout: 15_000 });
 
   const skipIntroButton = page.getByRole("button", { name: "Skip Intro" });
@@ -212,6 +219,18 @@ async function openOptionsPanel(page) {
   if (isExpanded !== "true") {
     await optionsButton.click();
   }
+}
+
+async function openMatchSetup(page) {
+  await clickLandingHubButton(page, "Match Setup");
+}
+
+async function clickLandingStartMatch(page) {
+  await clickLandingHubButton(page, "Press Start");
+}
+
+async function clickLandingHubButton(page, name: string) {
+  await page.getByRole("button", { name }).click({ force: true });
 }
 
 async function setRangeControlValue(page, label: string, value: number) {
@@ -240,8 +259,10 @@ async function blurEditableActiveElement(page) {
 test("starts a match and skips intro into active play", async ({ page }) => {
   await page.goto("/");
 
-  await expect(page.getByText("Soccer 3D")).toBeVisible();
-  await page.getByRole("button", { name: "Start Match" }).click();
+  await expect(page.getByTestId("landing-hero")).toBeVisible();
+  await expect(page.locator(".overlay")).toHaveCount(0);
+  await expect(page.getByText("Goal Rush").first()).toBeVisible();
+  await clickLandingStartMatch(page);
   await expect(page.getByText("Status: Pre-match Intro")).toBeVisible({ timeout: 15_000 });
 
   const skipIntroButton = page.getByRole("button", { name: "Skip Intro" });
@@ -257,6 +278,7 @@ test("starts a match and skips intro into active play", async ({ page }) => {
 
 test("supports control target switching from player to ball", async ({ page }) => {
   await page.goto("/");
+  await openMatchSetup(page);
 
   const playerControl = page.getByRole("button", { name: "Control Player" });
   const ballControl = page.getByRole("button", { name: "Control Ball" });
@@ -264,7 +286,7 @@ test("supports control target switching from player to ball", async ({ page }) =
   await expect(playerControl).toHaveAttribute("aria-pressed", "true");
   await expect(ballControl).toHaveAttribute("aria-pressed", "false");
 
-  await ballControl.click();
+  await clickLandingHubButton(page, "Control Ball");
 
   await expect(playerControl).toHaveAttribute("aria-pressed", "false");
   await expect(ballControl).toHaveAttribute("aria-pressed", "true");
@@ -273,10 +295,11 @@ test("supports control target switching from player to ball", async ({ page }) =
 test("uses the clickable pre-match hub selections when the match starts", async ({ page }) => {
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Hard" }).click();
-  await page.getByRole("button", { name: "Attacking Third" }).click();
-  await page.getByRole("button", { name: "Control Ball" }).click();
-  await page.getByRole("button", { name: "Start Match" }).click();
+  await openMatchSetup(page);
+  await clickLandingHubButton(page, "Hard");
+  await clickLandingHubButton(page, "Attacking Third");
+  await clickLandingHubButton(page, "Control Ball");
+  await clickLandingHubButton(page, "Start Match");
   await expect(page.getByText("Status: Pre-match Intro")).toBeVisible({ timeout: 15_000 });
 
   const skipIntroButton = page.getByRole("button", { name: "Skip Intro" });
@@ -298,14 +321,60 @@ test("uses the clickable pre-match hub selections when the match starts", async 
   await expect(page.getByLabel("Camera POV")).toHaveValue("attacking-third");
 });
 
+test("returns from the landing setup menu back to the title screen", async ({ page }) => {
+  await page.goto("/");
+  await openMatchSetup(page);
+
+  await expect(page.getByTestId("landing-menu-body")).toBeVisible();
+  await clickLandingHubButton(page, "Back to Title");
+
+  await expect(page.getByRole("button", { name: "Press Start" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Match Setup" })).toBeVisible();
+  await expect(page.getByTestId("landing-menu-body")).toHaveCount(0);
+  await expect(page.getByText("Status: Idle")).toBeVisible();
+});
+
+test("keeps the landing setup menu scrollable on short screens", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 640 });
+  await page.goto("/");
+  await openMatchSetup(page);
+
+  const menuBody = page.getByTestId("landing-menu-body");
+  await menuBody.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+
+  const startingMetrics = await menuBody.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+    scrollTop: element.scrollTop,
+  }));
+
+  expect(startingMetrics.scrollHeight).toBeGreaterThan(startingMetrics.clientHeight);
+  expect(startingMetrics.scrollTop).toBe(0);
+
+  await menuBody.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+
+  await expect
+    .poll(async () => menuBody.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0);
+
+  await expect(page.getByRole("button", { name: "Start Match" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Back to Title" })).toBeVisible();
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+});
+
 test("shows clickable camera options and supports camera hotkeys", async ({ page }) => {
   await page.goto("/");
+  await openMatchSetup(page);
 
   await expect(page.getByRole("button", { name: "Broadcast Wide" })).toHaveAttribute(
     "aria-pressed",
     "true"
   );
-  await page.getByRole("button", { name: "Free Roam" }).click();
+  await clickLandingHubButton(page, "Free Roam");
   await expect(page.getByRole("button", { name: "Free Roam" })).toHaveAttribute(
     "aria-pressed",
     "true"
@@ -415,7 +484,7 @@ test("keeps the soccer menu scrollable inside the overlay on short screens", asy
   await page.setViewportSize({ width: 390, height: 640 });
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Start Match" }).click();
+  await clickLandingStartMatch(page);
   await expect(page.getByText("Status: Pre-match Intro")).toBeVisible({ timeout: 15_000 });
 
   const skipIntroButton = page.getByRole("button", { name: "Skip Intro" });
@@ -453,7 +522,8 @@ test("keeps the soccer menu scrollable inside the overlay on short screens", asy
 
   await expect(page.getByRole("button", { name: "Restart Match" })).toBeVisible();
   await page.getByRole("button", { name: "Restart Match" }).click();
-  await expect(page.getByText("Status: Pre-match Intro")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Status: Idle")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("landing-hero")).toBeVisible();
 
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
 });
@@ -463,7 +533,7 @@ test("replays a goal, resets the field, and hands kickoff to the conceding team"
   await page.goto("/");
   await waitForSoccerTestApi(page);
 
-  await page.getByRole("button", { name: "Start Match" }).click();
+  await clickLandingStartMatch(page);
   await expect(page.getByText("Status: Pre-match Intro")).toBeVisible({ timeout: 15_000 });
 
   const skipIntroButton = page.getByRole("button", { name: "Skip Intro" });
@@ -627,6 +697,182 @@ test("a post-halftime physical positive-Z goal credits Team One after the side s
   await expect(page.getByTestId("score-team-two")).toHaveText("0");
   await expect(page.locator(".match-event-banner")).toHaveText("BRAZIL GOAL");
   await expect(page.getByTestId("event-ticker")).toContainText("Brazil goal");
+});
+
+test("full time switches to the end presentation and restores the saved POV after restart", async ({
+  page,
+}) => {
+  await enableSoccerE2EHarness(page);
+  await page.goto("/");
+  await waitForSoccerTestApi(page);
+  await startMatchAndSkipIntro(page);
+
+  await openOptionsPanel(page);
+  await page.getByLabel("Camera POV").selectOption("free-roam");
+
+  await setMatchTimeLeft(page, 1);
+
+  await page.waitForFunction(() => {
+    const soccerWindow = window as Window & {
+      __SOCCER_TEST_API__: {
+        getSnapshot: () => MatchSnapshot;
+      };
+    };
+    const snapshot = soccerWindow.__SOCCER_TEST_API__.getSnapshot();
+    return (
+      snapshot.gameState === "ended" &&
+      snapshot.activeCameraMode === "end-orbit" &&
+      snapshot.cameraSelectionLocked === true
+    );
+  });
+
+  await expect(page.getByText("Status: Match Ended")).toBeVisible();
+  await expect(page.getByTestId("full-time-presentation")).toBeVisible();
+  await expect(page.getByTestId("full-time-end-card")).toBeVisible();
+  await expect(page.getByTestId("full-time-end-card")).toHaveAttribute(
+    "data-layout",
+    "screen-modal"
+  );
+  await expect(page.getByTestId("full-time-team-one-flag")).toBeVisible();
+  await expect(page.getByTestId("full-time-team-two-flag")).toBeVisible();
+  await expect(page.getByTestId("full-time-team-one-score")).toHaveText("0");
+  await expect(page.getByTestId("full-time-team-two-score")).toHaveText("0");
+  const viewportSize = page.viewportSize();
+  const fullTimeCardBox = await page.getByTestId("full-time-end-card").boundingBox();
+  expect(viewportSize).not.toBeNull();
+  expect(fullTimeCardBox).not.toBeNull();
+  expect(fullTimeCardBox!.width / viewportSize!.width).toBeGreaterThan(0.75);
+  expect(fullTimeCardBox!.height / viewportSize!.height).toBeGreaterThan(0.55);
+  await expect(page.getByTestId("broadcast-scoreboard")).toHaveAttribute(
+    "data-presentation-mode",
+    "backup"
+  );
+  await expect(page.getByTestId("score-team-one")).toHaveText("0");
+  await expect(page.getByTestId("score-team-two")).toHaveText("0");
+  await expect(page.getByLabel("Camera POV")).toBeDisabled();
+  await expect(page.getByTestId("watch-highlights-button")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Restart Match" }).click();
+  await expect(page.getByText("Status: Idle")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("landing-hero")).toBeVisible();
+
+  await openMatchSetup(page);
+  await expect(page.getByLabel("Camera POV")).toHaveValue("free-roam");
+  await expect(page.getByLabel("Camera POV")).toBeEnabled();
+  await clickLandingHubButton(page, "Start Match");
+  await expect(page.getByText("Status: Pre-match Intro")).toBeVisible({ timeout: 15_000 });
+
+  await page.waitForFunction(() => {
+    const soccerWindow = window as Window & {
+      __SOCCER_TEST_API__: {
+        getSnapshot: () => MatchSnapshot;
+      };
+    };
+    const snapshot = soccerWindow.__SOCCER_TEST_API__.getSnapshot();
+    return snapshot.gameState === "intro" && snapshot.activeCameraMode === "free-roam";
+  });
+});
+
+test("full time highlights can be launched on demand, skipped, and cleared on restart", async ({
+  page,
+}) => {
+  await enableSoccerE2EHarness(page);
+  await page.goto("/");
+  await waitForSoccerTestApi(page);
+  await startMatchAndSkipIntro(page);
+
+  await triggerGoal(page, "teamOne");
+
+  await page.waitForFunction(() => {
+    const soccerWindow = window as Window & {
+      __SOCCER_TEST_API__: {
+        getSnapshot: () => MatchSnapshot;
+      };
+    };
+    const snapshot = soccerWindow.__SOCCER_TEST_API__.getSnapshot();
+    return snapshot.gameState === "goal_scored" && snapshot.replayState.isPlaying === true;
+  });
+
+  await expect(page.getByTestId("skip-replay-button")).toBeVisible();
+  await page.keyboard.press("KeyR");
+
+  await page.waitForFunction(() => {
+    const soccerWindow = window as Window & {
+      __SOCCER_TEST_API__: {
+        getSnapshot: () => MatchSnapshot;
+      };
+    };
+    const snapshot = soccerWindow.__SOCCER_TEST_API__.getSnapshot();
+    return snapshot.gameState === "in_play" && snapshot.archivedReplayCount === 1;
+  });
+
+  await setMatchTimeLeft(page, 1);
+
+  await page.waitForFunction(() => {
+    const soccerWindow = window as Window & {
+      __SOCCER_TEST_API__: {
+        getSnapshot: () => MatchSnapshot;
+      };
+    };
+    const snapshot = soccerWindow.__SOCCER_TEST_API__.getSnapshot();
+    return (
+      snapshot.gameState === "ended" &&
+      snapshot.archivedReplayCount === 1 &&
+      snapshot.replayBufferedFrameCount === 0
+    );
+  });
+
+  await expect(page.getByTestId("watch-highlights-button")).toBeVisible();
+  await page.getByTestId("watch-highlights-button").click({ force: true });
+
+  await page.waitForFunction(() => {
+    const soccerWindow = window as Window & {
+      __SOCCER_TEST_API__: {
+        getSnapshot: () => MatchSnapshot;
+      };
+    };
+    const snapshot = soccerWindow.__SOCCER_TEST_API__.getSnapshot();
+    return (
+      snapshot.gameState === "ended" &&
+      snapshot.activeCameraMode === "replay" &&
+      snapshot.replayState.source === "highlights" &&
+      snapshot.replayState.isPlaying === true &&
+      snapshot.replayState.playlistLength === 1
+    );
+  });
+
+  await expect(page.getByText("Status: Match Ended | Replay")).toBeVisible();
+  await expect(page.getByTestId("skip-replay-button")).toBeVisible();
+  await page.keyboard.press("KeyR");
+
+  await page.waitForFunction(() => {
+    const soccerWindow = window as Window & {
+      __SOCCER_TEST_API__: {
+        getSnapshot: () => MatchSnapshot;
+      };
+    };
+    const snapshot = soccerWindow.__SOCCER_TEST_API__.getSnapshot();
+    return (
+      snapshot.gameState === "ended" &&
+      snapshot.replayState.mode === "idle" &&
+      snapshot.replayState.source === null
+    );
+  });
+
+  await expect(page.getByTestId("full-time-end-card")).toBeVisible();
+  await page.getByRole("button", { name: "Restart Match" }).click();
+  await expect(page.getByText("Status: Idle")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("landing-hero")).toBeVisible();
+
+  await page.waitForFunction(() => {
+    const soccerWindow = window as Window & {
+      __SOCCER_TEST_API__: {
+        getSnapshot: () => MatchSnapshot;
+      };
+    };
+    const snapshot = soccerWindow.__SOCCER_TEST_API__.getSnapshot();
+    return snapshot.gameState === "idle" && snapshot.archivedReplayCount === 0;
+  });
 });
 
 test("team two attack scenario creates a shot quickly from the staged attack", async ({

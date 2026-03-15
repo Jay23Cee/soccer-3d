@@ -53,13 +53,61 @@ export function createReplayDirector(customConfig = {}) {
     cooldownUntilMs: 0,
     lastCaptureAtMs: 0,
     currentPlaybackIndex: 0,
+    source: null,
+    playlistIndex: 0,
+    playlistLength: 0,
+    archivedClips: [],
   };
+
+  function clearPlaybackState() {
+    internal.state = config.STATE.IDLE;
+    internal.playbackFrames = [];
+    internal.anchorFrameIndex = -1;
+    internal.armedAtMs = 0;
+    internal.eventType = null;
+    internal.eventId = null;
+    internal.playbackStartedAtMs = 0;
+    internal.cooldownUntilMs = 0;
+    internal.currentPlaybackIndex = 0;
+    internal.source = null;
+    internal.playlistIndex = 0;
+    internal.playlistLength = 0;
+  }
 
   function trimBuffer() {
     const overflow = internal.buffer.length - config.MAX_BUFFER_FRAMES;
     if (overflow > 0) {
       internal.buffer.splice(0, overflow);
       internal.anchorFrameIndex = Math.max(-1, internal.anchorFrameIndex - overflow);
+    }
+  }
+
+  function trimArchivedClips() {
+    const overflow = internal.archivedClips.length - config.MAX_ARCHIVED_CLIPS;
+    if (overflow > 0) {
+      internal.archivedClips.splice(0, overflow);
+    }
+  }
+
+  function archivePlaybackClip(nowMs) {
+    if (internal.eventType !== "goal" || internal.playbackFrames.length === 0) {
+      return;
+    }
+
+    const archivedClip = {
+      id: `clip-${internal.eventId}`,
+      eventType: internal.eventType,
+      eventId: internal.eventId,
+      createdAtMs: nowMs,
+      frames: internal.playbackFrames.map(cloneFrame),
+    };
+    const existingIndex = internal.archivedClips.findIndex((clip) => clip.eventId === internal.eventId);
+
+    if (existingIndex >= 0) {
+      internal.archivedClips.splice(existingIndex, 1, archivedClip);
+    } else {
+      internal.archivedClips.push(archivedClip);
+      trimArchivedClips();
     }
   }
 
@@ -116,6 +164,32 @@ export function createReplayDirector(customConfig = {}) {
     internal.playbackStartedAtMs = nowMs;
     internal.currentPlaybackIndex = 0;
     internal.state = config.STATE.PLAYING;
+    internal.source = "live";
+    internal.playlistIndex = 0;
+    internal.playlistLength = 0;
+    archivePlaybackClip(nowMs);
+    return true;
+  }
+
+  function playArchivedClip(clipId, nowMs, options = {}) {
+    const archivedClip = internal.archivedClips.find((clip) => clip.id === clipId);
+    if (!archivedClip) {
+      return false;
+    }
+
+    if (internal.state === config.STATE.PLAYING || internal.state === config.STATE.ARMED) {
+      return false;
+    }
+
+    internal.playbackFrames = archivedClip.frames.map(cloneFrame);
+    internal.playbackStartedAtMs = nowMs;
+    internal.currentPlaybackIndex = 0;
+    internal.state = config.STATE.PLAYING;
+    internal.eventType = archivedClip.eventType;
+    internal.eventId = archivedClip.eventId;
+    internal.source = "highlights";
+    internal.playlistIndex = Math.max(0, options.playlistIndex || 0);
+    internal.playlistLength = Math.max(0, options.playlistLength || 0);
     return true;
   }
 
@@ -145,12 +219,7 @@ export function createReplayDirector(customConfig = {}) {
     }
 
     if (internal.state === config.STATE.COOLDOWN && nowMs >= internal.cooldownUntilMs) {
-      internal.state = config.STATE.IDLE;
-      internal.eventType = null;
-      internal.eventId = null;
-      internal.playbackFrames = [];
-      internal.currentPlaybackIndex = 0;
-      internal.anchorFrameIndex = -1;
+      clearPlaybackState();
     }
 
     return getPublicState();
@@ -183,14 +252,46 @@ export function createReplayDirector(customConfig = {}) {
       eventId: internal.eventId,
       currentPlaybackIndex: internal.currentPlaybackIndex,
       totalPlaybackFrames: internal.playbackFrames.length,
+      source: internal.source,
+      playlistIndex: internal.playlistIndex,
+      playlistLength: internal.playlistLength,
     };
+  }
+
+  function stop() {
+    clearPlaybackState();
+    return getPublicState();
+  }
+
+  function clearLiveBuffer() {
+    internal.buffer = [];
+    internal.anchorFrameIndex = -1;
+    internal.lastCaptureAtMs = 0;
+  }
+
+  function getArchivedClips() {
+    return internal.archivedClips.map((clip) => ({
+      id: clip.id,
+      eventType: clip.eventType,
+      eventId: clip.eventId,
+      createdAtMs: clip.createdAtMs,
+    }));
+  }
+
+  function getBufferedFrameCount() {
+    return internal.buffer.length;
   }
 
   return {
     pushFrame,
     armReplay,
+    playArchivedClip,
     update,
     skip,
+    stop,
+    clearLiveBuffer,
+    getArchivedClips,
+    getBufferedFrameCount,
     getCurrentFrame,
     getPublicState,
   };
